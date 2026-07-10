@@ -35,6 +35,9 @@ async function init() {
   ($("ct_photo") as HTMLInputElement).checked = cur.contentTypes.photo;
   ($("ct_file") as HTMLInputElement).checked = cur.contentTypes.file;
   ($("ct_video") as HTMLInputElement).checked = cur.contentTypes.video;
+  ($("zip_galleries") as HTMLInputElement).checked = cur.zipGalleries;
+  ($("zip_path_tpl") as HTMLInputElement).value = cur.zipPathTemplate;
+  ($("zip_entry_tpl") as HTMLInputElement).value = cur.zipEntryTemplate;
   ["tpl", "repl", "conflict"].forEach((id) => $(id).addEventListener("input", updatePreview));
   updatePreview();
   $("save").addEventListener("click", async () => {
@@ -44,6 +47,9 @@ async function init() {
       illegalCharReplacement: ($("repl") as HTMLInputElement).value || "_",
       conflictAction: ($("conflict") as HTMLSelectElement).value as any,
       contentTypes: { photo: ($("ct_photo") as HTMLInputElement).checked, file: ($("ct_file") as HTMLInputElement).checked, video: ($("ct_video") as HTMLInputElement).checked },
+      zipGalleries: ($("zip_galleries") as HTMLInputElement).checked,
+      zipPathTemplate: ($("zip_path_tpl") as HTMLInputElement).value,
+      zipEntryTemplate: ($("zip_entry_tpl") as HTMLInputElement).value,
     };
     await saveSettings(cur);
     $("saved").textContent = "保存しました";

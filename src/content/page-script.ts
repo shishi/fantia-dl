@@ -18,7 +18,8 @@ window.addEventListener("message", async (ev) => {
   if (ev.source !== window) return;
   const msg = ev.data;
   if (!msg || msg.__fdl !== "req") return;
-  const reply = (payload: any) => window.postMessage({ __fdl: "res", reqId: msg.reqId, ...payload }, "*");
+  const reply = (payload: any, transfer: Transferable[] = []) =>
+    window.postMessage({ __fdl: "res", reqId: msg.reqId, ...payload }, "*", transfer);
   try {
     if (msg.kind === "fetchPost") {
       const r = await fetchRetry(`/api/v1/posts/${msg.postId}`, msg.csrf);
@@ -29,6 +30,12 @@ window.addEventListener("message", async (ev) => {
       const url = r.url;
       try { await r.body?.cancel(); } catch {}
       reply({ ok: true, url });
+    } else if (msg.kind === "fetchBinary") {
+      // signed URL (photo directUrl) は CSRF 不要 -> AUTH ヘッダなしで単純 fetch。
+      const r = await fetch(msg.url);
+      if (!r.ok) return reply({ ok: false, error: `status ${r.status}` });
+      const buf = await r.arrayBuffer();
+      reply({ ok: true, buffer: buf }, [buf]);
     }
   } catch (e) { reply({ ok: false, error: String(e) }); }
 });

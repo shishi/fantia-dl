@@ -15,6 +15,11 @@
 <label class="note"><input type="checkbox" id="ct_photo"> 画像</label>
 <label class="note"><input type="checkbox" id="ct_file"> ファイル</label>
 <label class="note"><input type="checkbox" id="ct_video"> 動画(file .mp4 等)</label>
+<label class="note"><input type="checkbox" id="zip_galleries"> 複数枚 photo は zip にまとめる</label>
+<label>zip ファイルのパステンプレート</label>
+<input id="zip_path_tpl" type="text">
+<label>zip 内エントリの命名テンプレート</label>
+<input id="zip_entry_tpl" type="text">
 <p class="note">⚠ 保存ダイアログが出る場合は Chrome 設定「ダウンロード前に各ファイルの保存場所を確認する」を OFF にしてください。拡張からは強制できません。</p>
 <p><button id="save">保存</button> <span id="saved" class="note"></span></p>
 <script type="module" src="./options.js"></script>

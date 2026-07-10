@@ -17,4 +17,8 @@ describe("mergeSettings", () => {
   it("既定テンプレは連番オプショナルグループを含む", () => {
     expect(DEFAULT_SETTINGS.pathTemplate).toContain("[$seq{3}_]");
   });
+  it("既定は zip モード ON", () => {
+    expect(DEFAULT_SETTINGS.zipGalleries).toBe(true);
+    expect(DEFAULT_SETTINGS.zipPathTemplate).toContain(".zip");
+  });
 });

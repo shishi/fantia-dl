@@ -48,4 +48,7 @@ export interface Settings {
   segmentMaxLen: number;
   fullPathMaxLen: number;
   uniquifyHeadroom: number;
+  zipGalleries: boolean;
+  zipPathTemplate: string;
+  zipEntryTemplate: string;
 }

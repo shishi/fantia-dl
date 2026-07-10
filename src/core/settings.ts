@@ -8,6 +8,9 @@ export const DEFAULT_SETTINGS: Settings = {
   segmentMaxLen: 200,
   fullPathMaxLen: 180,
   uniquifyHeadroom: 16,
+  zipGalleries: true,
+  zipPathTemplate: "fantia/$creator/$date{YYYYMMDD}_$postTitle/$contentTitle.zip",
+  zipEntryTemplate: "[$seq{3}_]$filename.$ext",
 };
 
 export function mergeSettings(stored: Partial<Settings> | undefined): Settings {
