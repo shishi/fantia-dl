@@ -4,7 +4,7 @@
 - リポジトリ: github.com/shishi/fantia-dl
 - 参考: [mnao305/fantia-dl-tool](https://github.com/mnao305/fantia-dl-tool)（MIT / 参考利用可）
 - 種別: Chrome 拡張機能（Manifest V3, TypeScript）
-- 改訂: v6（codex adversarial review 5 巡反映）
+- 改訂: v7（Phase-0 PoC 実施結果を反映）
 
 ## 1. 目的
 
@@ -54,15 +54,13 @@ DOM スクレイピングをフォールバックとする。認証の詳細は 
 - `$contentTitle` … コンテンツタイトル
 - `$contentId` … コンテンツ ID
 - `$contentType` … `photo` / `file` / `video`
+- `$plan` … コンテンツブロックの支援プラン名（PoC で取得確認済み。例「無料プラン」）
 
 ### ファイル単位
 - `$filename` … 元ファイル名（拡張子なし）
 - `$ext` … 拡張子（ドットなし）
 - `$seq` / `$seq{N}` … コンテンツブロック内連番、N 桁ゼロ詰め（例: `$seq{3}` → 001）
 - `$total` … ブロック内総数
-
-### 追加候補（実装時に取得可否を検証）
-- `$plan` … 支援プラン名
 
 ### 日付書式トークン
 `$date{}` / `$today{}` 内で使用可能: `YYYY YY MM M DD D HH mm ss`
@@ -170,24 +168,41 @@ sanitize 後の相対パス全体に対し、chrome.downloads の制約を満た
 - 失敗時リトライ: 401/403 の場合、content script が CSRF トークンを DOM から**再取得して 1 回だけ**
   リトライ。再失敗ならユーザーへ明示エラー（background 側では認証 fetch を行わない）。
 
-## 12. 実装前 PoC（リリースブロッキング・ゲート）
+## 12. Phase-0 PoC 結果（2026-07-10 実施・§11/§13 に反映済み）
 
-以下は「実装時に確認」では遅く、**プランに着手する前に spike で確定**する:
+ログイン済み Browser でサンプル投稿（posts/4135924=photo_gallery, posts/4140985=file/.mp4）を
+実測。主要不明点は解消。
 
-1. Fantia 投稿データの取得: JSON API の正確なエンドポイント・必要ヘッダ・cookie/CSRF 要否。
-   - content script 直 fetch と `world:"MAIN"` page-script 経由の両方で Origin/Referer/Cookie の
-     実挙動を検証し、通る方を canonical 認証経路に確定する（§11）。
-   - API が使えなければ DOM 抽出を主経路に確定する。
-2. 動画の取得方式: 直リンク URL か / 署名付き期限あり URL か / ストリーミングのみか。
-   - chrome.downloads で保存可能な形式でなければ動画はスコープ外へ。
-3. chrome.downloads.download の filename 制約の実挙動（非 ASCII・長いパス）を最小拡張で確認し、
-   OS 別のパス長上限を実測して §10 の上限を確定する。
-4. **end-to-end 実 DL spike**: photo と file を各 1 件、content script が取得した URL を
-   SW の `chrome.downloads.download` に渡して実保存できるか検証する。cookie 以外の
-   必要ヘッダ/referrer の要否、URL 有効期限（署名付き期限切れ）と期限切れ時の再取得方針を確定する。
-   - メタデータ取得の成功だけでは不十分。実ファイル DL の成立条件をここで gate する。
+- **認証形（確定）**: `GET /api/v1/posts/{postId}` はヘッダ無しだと **422**、
+  `X-CSRF-Token`（`meta[name=csrf-token]`）＋`X-Requested-With: XMLHttpRequest` ＋ cookie で **200**。
+  fetch は**ページ文脈（MAIN world）で成功**。→ content script 直 fetch を第一、page-script 経由を保険。
+- **データ構造（確定）**: `root.post` に `id/title/posted_at/converted_at/fanclub{creator_name,fanclub_name,id}/post_contents[]`。
+  各 content は `id/title/category/plan{name,price}/visible_status/post_content_photos[]/filename/download_uri`。
+- **photo（確定）**: `post_content_photos[].url` は `original/large/main/medium/micro/thumb/thumb_webp` の多サイズ。
+  原寸は `original`。**署名付き CloudFront 直リンク（Key-Pair-Id/Policy/Signature、期限つき）**。
+  元ファイル名は UUID のため `$filename` は URL basename、`$ext` は URL 末尾から導出。
+- **file（確定）**: `category:"file"`、`filename` は人間可読（例 `進捗9F.mp4`）、`download_uri` は
+  `/posts/{postId}/download/{contentId}`。GET follow で **302→署名付き実体URL→200**（content-length 実測 ~33MB）。
+  **download_uri は毎回サーバ側で再解決される安定エンドポイント＝期限切れの心配が無い**。
+  `Content-Disposition` は付かないため、保存名は本ツール側で付与する。
+- **video（部分確定）**: 動画は多くが **file 添付（.mp4）** として download_uri で取得可能＝通常の file 経路で成立。
+  専用ストリーミング（HLS/m3u8）カテゴリはサンプルに現れず**未確認のため experimental 据え置き**。
+- **ロック中コンテンツ**: `visible_status:"catchable"`（未加入プラン）は photos が空。取得対象から除外。
 
-PoC の結果を本設計書に追記してからプラン作成へ進む。
+### URL 失効の設計含意（§13 URL 再取得の対象を精緻化）
+- **photo**: 署名付き期限つき → 遅延 resume で失効し得る。§13 の URL 再取得（再 fetch）対象。
+- **file/video(file)**: download_uri が安定 → 再取得不要。resume でもそのまま再投入可。
+
+## 13. 実装前に残す確認（MVP マイルストーン1で実施・非ブロッキング）
+
+PoC で API/認証/URL/データ構造は確定済み。残るは拡張実行時の標準 Chrome 挙動のみで、
+MVP の最初の動作確認で潰す:
+
+1. `chrome.downloads.download({ saveAs:false, conflictAction:"uniquify" })` が実際に
+   ダイアログ無しで保存できるか（Chrome「保存場所を確認」設定 OFF 時）。
+2. 非 ASCII・長いパスでの filename 制約の実挙動、OS 別パス長上限の実測 → §10 の上限を確定。
+3. photo（署名 URL）・file（download_uri）各1件の end-to-end 保存確認。
+4. content script 直 fetch が isolated world でも 200 になるか（不可なら §11 の page-script 経路へ）。
 
 ## 13. service worker ライフサイクル / ジョブ永続化
 
