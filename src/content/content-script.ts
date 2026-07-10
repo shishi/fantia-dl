@@ -74,6 +74,21 @@ function findTitleAnchor(): HTMLElement | null {
   );
 }
 
+function whenTitleReady(cb: (title: HTMLElement | null) => void, timeoutMs = 5000): void {
+  const found = findTitleAnchor();
+  if (found) { cb(found); return; }
+  const obs = new MutationObserver(() => {
+    const t = findTitleAnchor();
+    if (t) {
+      obs.disconnect();
+      clearTimeout(tid);
+      cb(t);
+    }
+  });
+  obs.observe(document.body, { childList: true, subtree: true });
+  const tid = setTimeout(() => { obs.disconnect(); cb(null); }, timeoutMs);
+}
+
 function addButton() {
   if (document.getElementById("fdl-btn-container")) return;
 
@@ -124,15 +139,17 @@ function addButton() {
   container.appendChild(btn);
   container.appendChild(retryBtn);
 
-  const title = findTitleAnchor();
-  if (title && title.parentElement) {
-    title.parentElement.insertBefore(container, title.nextSibling);
-  } else {
-    Object.assign(container.style, {
-      position: "fixed", right: "16px", bottom: "16px", zIndex: "99999",
-    });
-    document.body.appendChild(container);
-  }
+  whenTitleReady((title) => {
+    if (document.getElementById("fdl-btn-container") && document.getElementById("fdl-btn-container") !== container) return;
+    if (title && title.parentElement) {
+      title.parentElement.insertBefore(container, title.nextSibling);
+    } else {
+      Object.assign(container.style, {
+        position: "fixed", right: "16px", bottom: "16px", zIndex: "99999",
+      });
+      document.body.appendChild(container);
+    }
+  });
 }
 
 (async () => { await injectPageScript(); addButton(); })();
