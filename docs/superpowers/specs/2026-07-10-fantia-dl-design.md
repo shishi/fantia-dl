@@ -4,7 +4,7 @@
 - リポジトリ: github.com/shishi/fantia-dl
 - 参考: [mnao305/fantia-dl-tool](https://github.com/mnao305/fantia-dl-tool)（MIT / 参考利用可）
 - 種別: Chrome 拡張機能（Manifest V3, TypeScript）
-- 改訂: v8（codex final review: 認証契約確定・video/uniquify 一本化）
+- 改訂: v9（認証契約の記述を全節で §11 に統一・stale 項目整理）
 
 ## 1. 目的
 
@@ -32,7 +32,7 @@ Manifest V3。責務を 5 モジュールに分離する。
 
 | モジュール | 責務 | テスト |
 |---|---|---|
-| content script | 投稿ページに DL ボタン注入 / postId 検出 / CSRF トークン抽出 / **認証付き fetch でデータ取得** | 手動 |
+| content script | DL ボタン注入 / postId・CSRF 抽出 / **MAIN-world page script を注入して API 取得**（§11）→ bridge で受領 | 手動 |
 | background (service worker) | ジョブ永続化・オーケストレーション → テンプレート展開 → 検証 → chrome.downloads 実行 | 統合（手動 + 一部） |
 | template engine（純粋関数） | context + テンプレ文字列 → 相対パス生成 | TDD |
 | sanitizer（純粋関数） | セグメント単位の文字整形・予約名回避・長さ制限 | TDD |
@@ -88,8 +88,9 @@ fantia/$creator/$date{YYYYMMDD}_$postTitle/$contentTitle/[$seq{3}_]$filename.$ex
 ## 6. データフロー
 
 1. content script が投稿ページで postId・CSRF トークンを検出し、DL ボタンを注入。
-2. クリックで content script が Fantia API を**認証付き fetch**で叩き、投稿データを取得（§11）。
-3. content script が取得データを background へ送信。
+2. クリックで content script が `world:"MAIN"` の page script を注入し、実ページ文脈で Fantia API を
+   fetch（§11 の canonical 経路。必須ヘッダ両方＋`credentials:"include"`）。
+3. page script が結果を bridge 経由で content script へ返し、content script が background へ送信。
 4. background がジョブを `chrome.storage.local` に永続化（§13a）し、ファイルごとに context を組み立てる。
 5. template engine がパス生成 → sanitizer が各セグメントを整形 → path validator が全体検証。
 6. **DL 前にバッチ内でパス重複を検出**（§8）。重複や検証失敗があれば実行せずエラー提示。
@@ -165,8 +166,8 @@ sanitize 後の相対パス全体に対し、chrome.downloads の制約を満た
   page script 注入を省ける。これは MVP マイルストーン1で実証できた場合のみ canonical を切替える
   （未実証の間は MAIN-world 経路を正とする）。
 - `host_permissions`: `https://fantia.jp/*`。
-- CSRF トークンは content script が `meta[name=csrf-token]` 等から抽出し、API 呼び出し時に
-  `X-CSRF-Token`（要否は §12 で確定）として付与。fetch は `credentials: "include"`。
+- CSRF トークンは content script が `meta[name=csrf-token]` から抽出し、page script へ渡す。
+  API 呼び出しは §11 冒頭の必須ヘッダ（`X-CSRF-Token` ＋ `X-Requested-With`）を付与（PoC で必須と実証済み）。
 - 失敗時リトライ: 401/403 の場合、content script が CSRF トークンを DOM から**再取得して 1 回だけ**
   リトライ。再失敗ならユーザーへ明示エラー（background 側では認証 fetch を行わない）。
 
@@ -177,7 +178,8 @@ sanitize 後の相対パス全体に対し、chrome.downloads の制約を満た
 
 - **認証形（確定）**: `GET /api/v1/posts/{postId}` はヘッダ無しだと **422**、
   `X-CSRF-Token`（`meta[name=csrf-token]`）＋`X-Requested-With: XMLHttpRequest` ＋ cookie で **200**。
-  fetch は**ページ文脈（MAIN world）で成功**。→ content script 直 fetch を第一、page-script 経由を保険。
+  fetch は**ページ文脈（MAIN world）で成功**。→ §11 の canonical は MAIN-world 注入 page script に確定。
+  content script 直 fetch(isolated world) は MVP1 で 200 を実証できた場合のみ切替える最適化扱い。
 - **データ構造（確定）**: `root.post` に `id/title/posted_at/converted_at/fanclub{creator_name,fanclub_name,id}/post_contents[]`。
   各 content は `id/title/category/plan{name,price}/visible_status/post_content_photos[]/filename/download_uri`。
 - **photo（確定）**: `post_content_photos[].url` は `original/large/main/medium/micro/thumb/thumb_webp` の多サイズ。
@@ -240,7 +242,7 @@ MV3 の service worker はアイドルで停止・再起動され得るため、
 - `illegalCharReplacement` … 禁止文字の置換文字（既定 `_`）
 - `conflictAction` … `uniquify`（既定）/ `overwrite`（警告付き）
 - `strictCollisionCheck` … 過去 DL 履歴との衝突警告（既定 OFF、§8）
-- `contentTypes` … photo / file / video（video は PoC 完了まで無効）の有効化トグル
+- `contentTypes` … photo / file / video の有効化トグル（video は **file 添付のみ対応**、HLS は非表示/非対応）
 - ライブプレビュー … サンプルデータでテンプレ展開＋sanitize＋検証結果を即時表示
 - ダイアログ設定・strict mode の限界に関する注意書きの常時表示
 - `needs_page` ジョブの再開導線（該当ページを開いて再取得→再投入）
@@ -262,8 +264,9 @@ MV3 の service worker はアイドルで停止・再起動され得るため、
 - Vitest（純粋モジュールの単体テスト）
 - 参考コードは Webpack だが、新規のため Vite を採用。
 
-## 17. 未確定事項（PoC 対象は §12）
+## 17. 未確定事項（MVP マイルストーン1で確定）
 
-- `$plan`（支援プラン名）の取得可否。
-- `@crxjs/vite-plugin` の MV3 対応状況。
-- Fantia API の正確なエンドポイント・CSRF 要否（§12-1）。
+- `@crxjs/vite-plugin` の MV3 対応状況（不可なら手書き manifest + Vite ライブラリビルド）。
+- セグメント長・全体パス長の最終上限値（OS 別実測、§10）。
+- isolated-world 直 fetch の可否（§11 最適化ゲート）。
+- 専用ストリーミング動画（HLS/m3u8）の扱い（v1 非対応、将来検討）。
