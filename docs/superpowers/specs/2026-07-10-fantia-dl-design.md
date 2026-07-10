@@ -4,7 +4,7 @@
 - リポジトリ: github.com/shishi/fantia-dl
 - 参考: [mnao305/fantia-dl-tool](https://github.com/mnao305/fantia-dl-tool)（MIT / 参考利用可）
 - 種別: Chrome 拡張機能（Manifest V3, TypeScript）
-- 改訂: v10（DL は常に直リンク署名 URL へ・422 リトライ・uniquify 余白拡大）
+- 改訂: v11（resolver を near-zero 転送化・未知プレースホルダを検証エラーに）
 
 ## 1. 目的
 
@@ -71,6 +71,10 @@ DOM スクレイピングをフォールバックとする。認証の詳細は 
 1 つでも空なら範囲ごと（囲んだリテラル文字も含めて）削除される。決定的で、連番以外の
 「あるときだけ付けたい」区切りにも使える。
 
+### 未知プレースホルダの扱い（normative）
+定義外の `$xxx` は**検証エラー**とし DL を一切開始しない（silent に空展開しない）。
+ライブプレビューでも即エラー表示。
+
 ### テンプレート例
 ```
 fantia/$creator/$date{YYYYMMDD}_$postTitle/$contentTitle/[$seq{3}_]$filename.$ext
@@ -116,9 +120,12 @@ Fantia 同一オリジンのエンドポイント（`download_uri` 等）を直�
 挙動に依存させないため）。
 
 - **photo**: `post_content_photos[].url.original`（署名付き CloudFront、そのまま渡せる）。
-- **file / video(file)**: MAIN-world で `fetch(download_uri, { credentials:"include" })` を follow し、
-  `response.url`（302 先の最終署名 URL）を取得してから body を cancel。この署名 URL を download() へ渡す。
+- **file / video(file)**: MAIN-world で `fetch(download_uri, { credentials:"include", headers:{ Range:"bytes=0-0" } })`
+  を follow し、`response.url`（302 先の最終署名 URL）を取得してから body を cancel。この署名 URL を download() へ渡す。
+  - **near-zero 転送**: `Range: bytes=0-0` で本体をほぼ転送せず最終 URL のみ解決。
+    `redirect:"manual"` は使えない（PoC 実測: cross-origin リダイレクトは opaqueredirect で Location 不可読）。
   - `download_uri` は安定エンドポイントのため、期限切れ時はこの解決を再実行すればよい（§13 の再取得）。
+  - テストゲート: resolver の転送量が near-zero であること。
 - **MVP マイルストーン1の hard gate**: photo・file 各1件で「URL 解決 → `downloads.download` 実保存」の
   end-to-end をプラン凍結前に必ず実証する（standard Chrome 挙動だが実行時確認を必須ゲートとする）。
 
@@ -168,6 +175,7 @@ sanitize 後の相対パス全体に対し、chrome.downloads の制約を満た
   ` (NNN)` を付与して OS 上限を超え得る。validator はファイル名セグメント・全体パスの両方で
   **既定 16 コードポイント分の余白を差し引いた上限**で判定する（設定可能。多数衝突・長名を保守的に想定）。
   （拡張側での決定的 suffix 方式は採らない＝実装・テストを一本化）。
+- 未知プレースホルダを含むテンプレート（§4）も検証エラーとして扱う。
 - 検証失敗時は chrome.downloads.download を呼ばず、ユーザーへエラー提示。
 
 ## 11. 認証設計（経路を一本化）
