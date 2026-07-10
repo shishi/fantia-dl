@@ -4,7 +4,7 @@
 - リポジトリ: github.com/shishi/fantia-dl
 - 参考: [mnao305/fantia-dl-tool](https://github.com/mnao305/fantia-dl-tool)（MIT / 参考利用可）
 - 種別: Chrome 拡張機能（Manifest V3, TypeScript）
-- 改訂: v7（Phase-0 PoC 実施結果を反映）
+- 改訂: v8（codex final review: 認証契約確定・video/uniquify 一本化）
 
 ## 1. 目的
 
@@ -20,7 +20,8 @@ Fantia の投稿から画像・添付ファイル・動画をダウンロード�
 ### DL 対象
 - 画像（photo gallery）
 - 添付ファイル（zip / psd / pdf など）
-- 動画（**experimental**。§12 の PoC 完了までは既定 OFF）
+- 動画: **file 添付の .mp4 等のみ対応**（通常の file 経路で取得）。
+  専用ストリーミング（HLS/m3u8）は **v1 非対応**として明示スキップ／ラベル表示。
 
 ### 対象外
 - サムネイル画像、テキスト本文の保存
@@ -146,22 +147,23 @@ sanitize 後の相対パス全体に対し、chrome.downloads の制約を満た
   - 注意: コードポイント数は実 OS のパス長制限（Windows は基準 Downloads フォルダ絶対パスも
     加算、UTF-16/バイト計測）と一致しないため「この値で安全」とは断言しない。保守的な初期値であり、
     §12 の PoC で OS 別に実測して最終上限を確定する。基準フォルダが深い環境向けに下限側へ調整可能。
-- **uniquify の余白予約**: `conflictAction: "uniquify"` 有効時、Chrome が末尾へ ` (NNN)`
-  （最大目安 6 コードポイント）を付与して OS 上限を超え得る。validator はファイル名セグメント・
-  全体パスの両方でこの分の**余白を差し引いた上限**で判定する（あるいは §8 のとおり拡張側で
-  決定的に suffix を付けてから検証し、`download()` は `overwrite` 明示時のみ）。
+- **uniquify の余白予約（単一方針・normative）**: `conflictAction: "uniquify"` 時、Chrome が末尾へ
+  ` (NNN)`（最大 6 コードポイント想定）を付与して OS 上限を超え得る。validator は
+  ファイル名セグメント・全体パスの両方で**常に 6 コードポイント分の余白を差し引いた上限**で判定する。
+  （拡張側での決定的 suffix 方式は採らない＝実装・テストを一本化）。
 - 検証失敗時は chrome.downloads.download を呼ばず、ユーザーへエラー提示。
 
 ## 11. 認証設計（経路を一本化）
 
-- **canonical 経路**: **content script から認証付き fetch**（`credentials: "include"`）を行う。
-  - 理由: Fantia の session cookie と `meta[name=csrf-token]` が同一ページ文脈で自然に得られ、
-    background からの cross-context な cookie/CSRF 取り回しを避けられる。
-  - 注意: content script は isolated world で動くため、Fantia API が Origin/Referer を厳格に
-    見る場合、期待どおりのページオリジン扱いにならない可能性がある（§12 で実挙動を検証）。
-- **フォールバック経路（一級）**: 上記が Origin/Referer で弾かれる場合、`world: "MAIN"` の
-  注入 page script（実ページ文脈で fetch）＋ message bridge でデータ取得する方式を用意する。
-  - PoC で content script 直 fetch と page-script 経由の両方を試し、通る方を canonical に確定する。
+- **canonical 経路（確定）**: **`world: "MAIN"` 注入 page script による実ページ文脈 fetch ＋ message bridge**。
+  - PoC で MAIN world からの fetch が 200 で成功済み（§12）。実ページ文脈のため Origin/Referer/cookie が
+    確実に正しく載る。取得データは bridge 経由で content script → background へ渡す。
+- **必須ヘッダ（normative）**: `X-CSRF-Token`（`meta[name=csrf-token]`）と
+  `X-Requested-With: XMLHttpRequest` の**両方**を付与し、`credentials: "include"`。
+  - PoC 実測: 両ヘッダ無し=422 / 両ヘッダ有り=200。
+- **最適化（任意・ゲート付き）**: content script の isolated world 直 fetch でも 200 になるなら、
+  page script 注入を省ける。これは MVP マイルストーン1で実証できた場合のみ canonical を切替える
+  （未実証の間は MAIN-world 経路を正とする）。
 - `host_permissions`: `https://fantia.jp/*`。
 - CSRF トークンは content script が `meta[name=csrf-token]` 等から抽出し、API 呼び出し時に
   `X-CSRF-Token`（要否は §12 で確定）として付与。fetch は `credentials: "include"`。
@@ -202,7 +204,8 @@ MVP の最初の動作確認で潰す:
    ダイアログ無しで保存できるか（Chrome「保存場所を確認」設定 OFF 時）。
 2. 非 ASCII・長いパスでの filename 制約の実挙動、OS 別パス長上限の実測 → §10 の上限を確定。
 3. photo（署名 URL）・file（download_uri）各1件の end-to-end 保存確認。
-4. content script 直 fetch が isolated world でも 200 になるか（不可なら §11 の page-script 経路へ）。
+4. （最適化ゲート）content script 直 fetch が isolated world でも 200 になるか。
+   なるなら §11 の canonical を isolated-world に切替可。ならなければ MAIN-world 経路を正とする（既定）。
 
 ## 13. service worker ライフサイクル / ジョブ永続化
 
