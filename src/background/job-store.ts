@@ -21,3 +21,11 @@ export async function updateJob(idemKey: string, patch: Partial<JobRecord>): Pro
 export async function findByDownloadId(id: number): Promise<JobRecord | undefined> {
   return Object.values(await getAllJobs()).find((j) => j.downloadId === id);
 }
+export async function removeJobsByPostId(postId: string): Promise<void> {
+  const all = await getAllJobs();
+  const keep: Record<string, JobRecord> = {};
+  for (const [k, v] of Object.entries(all)) {
+    if (!k.startsWith(`${postId}:`)) keep[k] = v;
+  }
+  await chrome.storage.local.set({ [KEY]: keep });
+}

@@ -3,7 +3,7 @@ import { renderTemplate, TemplateError } from "../core/template-engine";
 import { validatePath } from "../core/path-validator";
 import type { RenderContext, Settings } from "../core/types";
 import type { EnqueueMessage, EnqueueItem, PostMeta } from "../content/messages";
-import { getAllJobs, putJobs, updateJob, findByDownloadId, type JobRecord } from "./job-store";
+import { getAllJobs, putJobs, updateJob, findByDownloadId, removeJobsByPostId, type JobRecord } from "./job-store";
 
 function ctxOf(post: PostMeta, it: EnqueueItem): RenderContext {
   return {
@@ -16,6 +16,9 @@ function ctxOf(post: PostMeta, it: EnqueueItem): RenderContext {
 
 async function handleEnqueue(msg: EnqueueMessage): Promise<{ queued: number; error?: string }> {
   const s: Settings = await loadSettings();
+  if (msg.force) {
+    await removeJobsByPostId(msg.post.postId);
+  }
   const enabled = (t: string) => (s.contentTypes as any)[t] !== false;
   const jobs: JobRecord[] = [];
   const seenPaths = new Set<string>();

@@ -26,4 +26,5 @@ export interface EnqueueMessage {
   post: PostMeta;
   items: EnqueueItem[];
   pageUrl: string;
+  force?: boolean;
 }

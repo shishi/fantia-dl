@@ -25,7 +25,7 @@ function call(kind: string, extra: Record<string, unknown>): Promise<any> {
   });
 }
 
-async function runDownload() {
+async function runDownload(force: boolean) {
   const postId = postIdFromUrl();
   if (!postId) return alert("[fantia-dl] postId 不明");
   const fetched = await call("fetchPost", { postId });
@@ -52,17 +52,37 @@ async function runDownload() {
       });
     }
   }
-  const res = await chrome.runtime.sendMessage({ kind: "enqueue", post: meta, items, pageUrl: location.href } as EnqueueMessage);
+  const res = await chrome.runtime.sendMessage({ kind: "enqueue", post: meta, items, pageUrl: location.href, force } as EnqueueMessage);
   alert(`[fantia-dl] ${res?.queued ?? 0} 件をダウンロード開始` + (res?.error ? `\nエラー: ${res.error}` : ""));
 }
 
 function addButton() {
   if (document.getElementById("fdl-btn")) return;
+  const container = document.createElement("div");
+  Object.assign(container.style, {
+    position: "fixed", right: "16px", bottom: "16px", zIndex: "99999",
+    display: "flex", gap: "8px",
+  });
+
   const btn = document.createElement("button");
   btn.id = "fdl-btn"; btn.textContent = "⬇ fantia-dl";
-  Object.assign(btn.style, { position: "fixed", right: "16px", bottom: "16px", zIndex: "99999", padding: "10px 14px", borderRadius: "8px", cursor: "pointer" });
-  btn.addEventListener("click", () => { btn.disabled = true; runDownload().finally(() => (btn.disabled = false)); });
-  document.body.appendChild(btn);
+  btn.title = "ダウンロード(履歴があれば済んだ分はスキップ)";
+  Object.assign(btn.style, { padding: "10px 14px", borderRadius: "8px", cursor: "pointer" });
+  btn.addEventListener("click", () => { btn.disabled = true; runDownload(false).finally(() => (btn.disabled = false)); });
+
+  const retryBtn = document.createElement("button");
+  retryBtn.id = "fdl-retry-btn"; retryBtn.textContent = "🔄";
+  retryBtn.title = "やり直し(この投稿の履歴を消して再ダウンロード)";
+  Object.assign(retryBtn.style, { padding: "10px 12px", borderRadius: "8px", cursor: "pointer" });
+  retryBtn.addEventListener("click", () => {
+    if (!confirm("この投稿の DL 履歴を消して再ダウンロードします。よろしいですか?")) return;
+    retryBtn.disabled = true;
+    runDownload(true).finally(() => (retryBtn.disabled = false));
+  });
+
+  container.appendChild(btn);
+  container.appendChild(retryBtn);
+  document.body.appendChild(container);
 }
 
 (async () => { await injectPageScript(); addButton(); })();
