@@ -1,0 +1,36 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests",
+    ":semanticCommits",
+    ":timezone(Asia/Tokyo)"
+  ],
+  "schedule": [
+    "before 6am on monday"
+  ],
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": [
+      "before 6am on monday"
+    ]
+  },
+  "nix": {
+    "enabled": true
+  },
+  "packageRules": [
+    {
+      "matchManagers": ["github-actions"],
+      "pinDigests": true,
+      "commitMessageTopic": "GitHub Action {{depName}}"
+    },
+    {
+      "matchManagers": ["nix"],
+      "commitMessageTopic": "Nix input {{depName}}"
+    },
+    {
+      "matchManagers": ["bun", "npm"],
+      "commitMessageTopic": "{{depName}}"
+    }
+  ]
+}

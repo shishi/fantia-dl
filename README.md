@@ -47,10 +47,11 @@ Chrome 設定「ダウンロード前に各ファイルの保存場所を確認�
 
 ## 依存関係の自動更新
 
-Nix flake / Bun / GitHub Actions のバージョン管理は **Renovate** で自動化しています。
+Nix flake / Bun / npm / GitHub Actions のバージョン管理は **Renovate**(`.github/renovate.json`)で自動化しています。
 
-- 週次(月曜朝)に Renovate が新バージョンを検出して PR を送信
-- 更新は種類ごとにグルーピング(Nix inputs / GitHub Actions / Bun deps)
+- 週次(月曜朝、JST)に Renovate が新バージョンを検出して PR を送信
+- GitHub Actions は commit SHA 固定(コメントでタグを併記)。Renovate が SHA を自動更新
+- lockFileMaintenance で flake.lock / bun.lock を週次リフレッシュ
 - リポジトリの Issues に「Dependency Dashboard」が立つ
 - automerge は無効、shishi が確認して merge
 
