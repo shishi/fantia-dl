@@ -58,8 +58,14 @@ async function startDownload(j: JobRecord, s: Settings): Promise<void> {
   }
 }
 
+
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg?.kind === "enqueue") { handleEnqueue(msg as EnqueueMessage).then(sendResponse); return true; }
+  if (msg?.kind === "enqueue") {
+    handleEnqueue(msg as EnqueueMessage)
+      .then(sendResponse)
+      .catch((e) => sendResponse({ queued: 0, error: String(e) }));
+    return true;
+  }
   return false;
 });
 
