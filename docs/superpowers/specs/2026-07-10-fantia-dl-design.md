@@ -4,7 +4,7 @@
 - リポジトリ: github.com/shishi/fantia-dl
 - 参考: [mnao305/fantia-dl-tool](https://github.com/mnao305/fantia-dl-tool)（MIT / 参考利用可）
 - 種別: Chrome 拡張機能（Manifest V3, TypeScript）
-- 改訂: v9（認証契約の記述を全節で §11 に統一・stale 項目整理）
+- 改訂: v10（DL は常に直リンク署名 URL へ・422 リトライ・uniquify 余白拡大）
 
 ## 1. 目的
 
@@ -94,7 +94,10 @@ fantia/$creator/$date{YYYYMMDD}_$postTitle/$contentTitle/[$seq{3}_]$filename.$ex
 4. background がジョブを `chrome.storage.local` に永続化（§13a）し、ファイルごとに context を組み立てる。
 5. template engine がパス生成 → sanitizer が各セグメントを整形 → path validator が全体検証。
 6. **DL 前にバッチ内でパス重複を検出**（§8）。重複や検証失敗があれば実行せずエラー提示。
-7. `chrome.downloads.download({ url, filename, saveAs: false, conflictAction })` を冪等キー単位で実行。
+7. **DL 用の直リンク署名 URL を解決**（§7a）: photo は `url.original`、file/video は MAIN-world で
+   `download_uri` を follow して最終署名 URL（`response.url`）を得る（body は取得せず cancel）。
+8. `chrome.downloads.download({ url: 直リンク署名URL, filename, saveAs: false, conflictAction })` を
+   冪等キー単位で実行。**cookie 認証エンドポイントは download() に渡さない**（cookie/SameSite 非依存）。
 
 ## 7. 保存ダイアログ抑制（保証範囲を明示）
 
@@ -105,6 +108,19 @@ fantia/$creator/$date{YYYYMMDD}_$postTitle/$contentTitle/[$seq{3}_]$filename.$ex
   - README にこの設定を OFF にする手順を明記。
   - 拡張からこの設定値を読む API は無いため、options ページに「ダイアログが出る場合は
     Chrome 設定を確認」という注意を常時表示する。
+
+## 7a. DL URL 解決戦略（cookie 非依存・normative）
+
+`chrome.downloads.download` には**常に直リンクの署名付き公開 URL のみ**を渡す。cookie 認証が要る
+Fantia 同一オリジンのエンドポイント（`download_uri` 等）を直接渡さない（拡張文脈の cookie/SameSite
+挙動に依存させないため）。
+
+- **photo**: `post_content_photos[].url.original`（署名付き CloudFront、そのまま渡せる）。
+- **file / video(file)**: MAIN-world で `fetch(download_uri, { credentials:"include" })` を follow し、
+  `response.url`（302 先の最終署名 URL）を取得してから body を cancel。この署名 URL を download() へ渡す。
+  - `download_uri` は安定エンドポイントのため、期限切れ時はこの解決を再実行すればよい（§13 の再取得）。
+- **MVP マイルストーン1の hard gate**: photo・file 各1件で「URL 解決 → `downloads.download` 実保存」の
+  end-to-end をプラン凍結前に必ず実証する（standard Chrome 挙動だが実行時確認を必須ゲートとする）。
 
 ## 8. 衝突・重複の扱い
 
@@ -149,8 +165,8 @@ sanitize 後の相対パス全体に対し、chrome.downloads の制約を満た
     加算、UTF-16/バイト計測）と一致しないため「この値で安全」とは断言しない。保守的な初期値であり、
     §12 の PoC で OS 別に実測して最終上限を確定する。基準フォルダが深い環境向けに下限側へ調整可能。
 - **uniquify の余白予約（単一方針・normative）**: `conflictAction: "uniquify"` 時、Chrome が末尾へ
-  ` (NNN)`（最大 6 コードポイント想定）を付与して OS 上限を超え得る。validator は
-  ファイル名セグメント・全体パスの両方で**常に 6 コードポイント分の余白を差し引いた上限**で判定する。
+  ` (NNN)` を付与して OS 上限を超え得る。validator はファイル名セグメント・全体パスの両方で
+  **既定 16 コードポイント分の余白を差し引いた上限**で判定する（設定可能。多数衝突・長名を保守的に想定）。
   （拡張側での決定的 suffix 方式は採らない＝実装・テストを一本化）。
 - 検証失敗時は chrome.downloads.download を呼ばず、ユーザーへエラー提示。
 
@@ -168,8 +184,8 @@ sanitize 後の相対パス全体に対し、chrome.downloads の制約を満た
 - `host_permissions`: `https://fantia.jp/*`。
 - CSRF トークンは content script が `meta[name=csrf-token]` から抽出し、page script へ渡す。
   API 呼び出しは §11 冒頭の必須ヘッダ（`X-CSRF-Token` ＋ `X-Requested-With`）を付与（PoC で必須と実証済み）。
-- 失敗時リトライ: 401/403 の場合、content script が CSRF トークンを DOM から**再取得して 1 回だけ**
-  リトライ。再失敗ならユーザーへ明示エラー（background 側では認証 fetch を行わない）。
+- 失敗時リトライ: **401/403/422**（PoC で CSRF/ヘッダ不備は 422 と実証）の場合、CSRF トークンを
+  DOM から**再取得して 1 回だけ**リトライ。再失敗ならユーザーへ明示エラー。
 
 ## 12. Phase-0 PoC 結果（2026-07-10 実施・§11/§13 に反映済み）
 
@@ -202,11 +218,10 @@ sanitize 後の相対パス全体に対し、chrome.downloads の制約を満た
 PoC で API/認証/URL/データ構造は確定済み。残るは拡張実行時の標準 Chrome 挙動のみで、
 MVP の最初の動作確認で潰す:
 
-1. `chrome.downloads.download({ saveAs:false, conflictAction:"uniquify" })` が実際に
-   ダイアログ無しで保存できるか（Chrome「保存場所を確認」設定 OFF 時）。
+1. **（hard gate・§7a）** photo・file 各1件で「直リンク署名 URL 解決 → `downloads.download` 実保存」を実証。
+   併せて `saveAs:false` でダイアログ無し保存（Chrome「保存場所を確認」OFF 時）を確認。
 2. 非 ASCII・長いパスでの filename 制約の実挙動、OS 別パス長上限の実測 → §10 の上限を確定。
-3. photo（署名 URL）・file（download_uri）各1件の end-to-end 保存確認。
-4. （最適化ゲート）content script 直 fetch が isolated world でも 200 になるか。
+3. （最適化ゲート）content script 直 fetch が isolated world でも 200 になるか。
    なるなら §11 の canonical を isolated-world に切替可。ならなければ MAIN-world 経路を正とする（既定）。
 
 ## 13. service worker ライフサイクル / ジョブ永続化
