@@ -2,9 +2,43 @@
 
 Fantia の投稿(自分がアクセス権を持つコンテンツ)をテンプレート命名で自動ダウンロードする Chrome 拡張。個人アーカイブ用。参考: mnao305/fantia-dl-tool(MIT)。
 
-## ビルド / インストール
-1. `npm install && npm run build`
-2. `chrome://extensions` → デベロッパーモード ON → `dist/` を読み込む
+## セットアップ
+
+拡張本体は Chrome の V8 で動くので **開発 OS は問わない**(Windows / macOS / Linux で開発可能)。
+ビルドツール(esbuild / vitest / tsc)だけ Node.js または Bun ランタイムが必要。
+
+### 選択肢A: Node.js + npm(標準)
+
+前提: Node.js 24 以上、npm 11 以上
+
+```
+npm install && npm run build
+```
+
+### 選択肢B: Bun
+
+前提: Bun がインストール済み
+
+```
+bun install && bun scripts/build.mjs
+```
+
+### 選択肢C: Nix(flake + direnv)
+
+前提: nix (flakes 有効) と direnv
+
+```
+echo "use flake" > .envrc  # 既に含まれる
+direnv allow                # 初回だけ
+npm install && npm run build
+```
+
+`nix develop` で手動で shell に入っても同じ。Node.js 24 と Bun 両方入りの環境が立ち上がる。
+
+### 拡張のインストール
+
+1. `dist/` フォルダを Chrome の `chrome://extensions` から「パッケージ化されていない拡張機能を読み込む」で指定
+2. Chrome 設定「ダウンロード前に各ファイルの保存場所を確認する」を **OFF** にする(拡張から強制できない、spec §7 参照)
 
 ## 使い方
 Fantia の投稿ページ右下「⬇ fantia-dl」をクリック。保存先はオプションのテンプレートで決まる。
