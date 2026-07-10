@@ -1,4 +1,3 @@
-// src/content/content-script.ts
 import { parsePost } from "../fantia/parse";
 import type { EnqueueItem, EnqueueMessage, PostMeta } from "./messages";
 
@@ -7,7 +6,10 @@ const postIdFromUrl = () => location.pathname.match(/posts\/(\d+)/)?.[1] ?? null
 
 function injectPageScript(): Promise<void> {
   return new Promise((res) => {
-    const onReady = (ev: MessageEvent) => { if (ev.source !== window) return; if (ev.data?.__fdl === "ready") { window.removeEventListener("message", onReady); res(); } };
+    const onReady = (ev: MessageEvent) => {
+      if (ev.source !== window) return;
+      if (ev.data?.__fdl === "ready") { window.removeEventListener("message", onReady); res(); }
+    };
     window.addEventListener("message", onReady);
     const s = document.createElement("script");
     s.src = chrome.runtime.getURL("content/page-script.js");
@@ -19,17 +21,23 @@ let reqSeq = 0;
 function call(kind: string, extra: Record<string, unknown>): Promise<any> {
   const reqId = ++reqSeq;
   return new Promise((res) => {
-    const on = (ev: MessageEvent) => { if (ev.source !== window) return; if (ev.data?.__fdl === "res" && ev.data.reqId === reqId) { window.removeEventListener("message", on); res(ev.data); } };
+    const on = (ev: MessageEvent) => {
+      if (ev.source !== window) return;
+      if (ev.data?.__fdl === "res" && ev.data.reqId === reqId) {
+        window.removeEventListener("message", on);
+        res(ev.data);
+      }
+    };
     window.addEventListener("message", on);
     window.postMessage({ __fdl: "req", reqId, kind, csrf: csrf(), ...extra }, "*");
   });
 }
 
-async function runDownload(force: boolean) {
+async function runDownload(force: boolean): Promise<{ queued?: number; error?: string } | null> {
   const postId = postIdFromUrl();
-  if (!postId) return alert("[fantia-dl] postId 不明");
+  if (!postId) { alert("[fantia-dl] postId 不明"); return null; }
   const fetched = await call("fetchPost", { postId });
-  if (!fetched.ok) return alert(`[fantia-dl] 取得失敗: ${fetched.error}`);
+  if (!fetched.ok) { alert(`[fantia-dl] 取得失敗: ${fetched.error}`); return null; }
   const post = parsePost(fetched.json);
 
   const meta: PostMeta = {
@@ -52,37 +60,79 @@ async function runDownload(force: boolean) {
       });
     }
   }
-  const res = await chrome.runtime.sendMessage({ kind: "enqueue", post: meta, items, pageUrl: location.href, force } as EnqueueMessage);
-  alert(`[fantia-dl] ${res?.queued ?? 0} 件をダウンロード開始` + (res?.error ? `\nエラー: ${res.error}` : ""));
+  const res: { queued?: number; error?: string } | null =
+    await chrome.runtime.sendMessage({ kind: "enqueue", post: meta, items, pageUrl: location.href, force } as EnqueueMessage);
+  if (res?.error) alert(`[fantia-dl] エラー: ${res.error}`);
+  return res ?? null;
+}
+
+function findTitleAnchor(): HTMLElement | null {
+  return (
+    document.querySelector<HTMLElement>(".the-post .post-header h1.post-title") ||
+    document.querySelector<HTMLElement>(".post-header h1.post-title") ||
+    document.querySelector<HTMLElement>("h1.post-title")
+  );
 }
 
 function addButton() {
-  if (document.getElementById("fdl-btn")) return;
+  if (document.getElementById("fdl-btn-container")) return;
+
   const container = document.createElement("div");
+  container.id = "fdl-btn-container";
   Object.assign(container.style, {
-    position: "fixed", right: "16px", bottom: "16px", zIndex: "99999",
-    display: "flex", gap: "8px",
+    display: "flex", gap: "8px", margin: "8px 0",
   });
 
+  const styleBtn = (b: HTMLButtonElement) => {
+    Object.assign(b.style, {
+      padding: "6px 12px", borderRadius: "6px", cursor: "pointer", fontSize: "14px",
+    });
+  };
+
+  const swapText = (b: HTMLButtonElement, temp: string, ms = 2500) => {
+    const orig = b.dataset.origText ?? b.textContent ?? "";
+    if (!b.dataset.origText) b.dataset.origText = orig;
+    b.textContent = temp;
+    setTimeout(() => { b.textContent = b.dataset.origText || orig; b.disabled = false; }, ms);
+  };
+
   const btn = document.createElement("button");
-  btn.id = "fdl-btn"; btn.textContent = "⬇ fantia-dl";
+  btn.id = "fdl-btn"; btn.type = "button"; btn.textContent = "⬇ fantia-dl";
   btn.title = "ダウンロード(履歴があれば済んだ分はスキップ)";
-  Object.assign(btn.style, { padding: "10px 14px", borderRadius: "8px", cursor: "pointer" });
-  btn.addEventListener("click", () => { btn.disabled = true; runDownload(false).finally(() => (btn.disabled = false)); });
+  styleBtn(btn);
+  btn.addEventListener("click", () => {
+    btn.disabled = true;
+    runDownload(false).then((r) => {
+      if (r && typeof r.queued === "number") swapText(btn, `⬇ ${r.queued} 件開始`);
+      else btn.disabled = false;
+    }).catch(() => { btn.disabled = false; });
+  });
 
   const retryBtn = document.createElement("button");
-  retryBtn.id = "fdl-retry-btn"; retryBtn.textContent = "🔄";
+  retryBtn.id = "fdl-retry-btn"; retryBtn.type = "button"; retryBtn.textContent = "🔄";
   retryBtn.title = "やり直し(この投稿の履歴を消して再ダウンロード)";
-  Object.assign(retryBtn.style, { padding: "10px 12px", borderRadius: "8px", cursor: "pointer" });
+  styleBtn(retryBtn);
   retryBtn.addEventListener("click", () => {
     if (!confirm("この投稿の DL 履歴を消して再ダウンロードします。よろしいですか?")) return;
     retryBtn.disabled = true;
-    runDownload(true).finally(() => (retryBtn.disabled = false));
+    runDownload(true).then((r) => {
+      if (r && typeof r.queued === "number") swapText(retryBtn, `🔄 ${r.queued} 件`);
+      else retryBtn.disabled = false;
+    }).catch(() => { retryBtn.disabled = false; });
   });
 
   container.appendChild(btn);
   container.appendChild(retryBtn);
-  document.body.appendChild(container);
+
+  const title = findTitleAnchor();
+  if (title && title.parentElement) {
+    title.parentElement.insertBefore(container, title.nextSibling);
+  } else {
+    Object.assign(container.style, {
+      position: "fixed", right: "16px", bottom: "16px", zIndex: "99999",
+    });
+    document.body.appendChild(container);
+  }
 }
 
 (async () => { await injectPageScript(); addButton(); })();
