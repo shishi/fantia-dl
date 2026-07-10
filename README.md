@@ -44,3 +44,14 @@ Chrome 設定「ダウンロード前に各ファイルの保存場所を確認�
 ## テンプレート
 `$creator $creatorId $postTitle $postId $date{YYYYMMDD} $today{} $contentTitle $contentId $contentType $plan $filename $ext $seq $seq{3} $total` とオプショナルグループ `[ ... ]`(中の placeholder が空なら丸ごと消える)。
 例: `fantia/$creator/$date{YYYYMMDD}_$postTitle/$contentTitle/[$seq{3}_]$filename.$ext`
+
+## 依存関係の自動更新
+
+Nix flake / Bun / GitHub Actions のバージョン管理は **Renovate** で自動化しています。
+
+- 週次(月曜朝)に Renovate が新バージョンを検出して PR を送信
+- 更新は種類ごとにグルーピング(Nix inputs / GitHub Actions / Bun deps)
+- リポジトリの Issues に「Dependency Dashboard」が立つ
+- automerge は無効、shishi が確認して merge
+
+初回セットアップ: [Renovate GitHub App](https://github.com/apps/renovate) をリポジトリに招待する(shishi の手動作業)。
