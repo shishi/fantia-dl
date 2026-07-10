@@ -55,4 +55,9 @@ Nix flake / Bun / npm / GitHub Actions のバージョン管理は **Renovate**(
 - リポジトリの Issues に「Dependency Dashboard」が立つ
 - automerge は無効、shishi が確認して merge
 
-初回セットアップ: [Renovate GitHub App](https://github.com/apps/renovate) をリポジトリに招待する(shishi の手動作業)。
+初回セットアップ(いずれか片方):
+
+- **Renovate app を初めて使う場合**: [Renovate をインストール](https://github.com/apps/renovate/installations/new) → 選択画面で `fantia-dl` を選ぶ
+- **既に他リポで使っている場合**: [Installed GitHub Apps](https://github.com/settings/installations) から Renovate を開いて "Repository access" に `fantia-dl` を追加
+
+いずれも 1 クリック程度の手動作業(GitHub App の install は仕様上 UI 承認が必要で、完全自動化はできません)。
