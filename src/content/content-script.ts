@@ -7,7 +7,7 @@ const postIdFromUrl = () => location.pathname.match(/posts\/(\d+)/)?.[1] ?? null
 
 function injectPageScript(): Promise<void> {
   return new Promise((res) => {
-    const onReady = (ev: MessageEvent) => { if (ev.data?.__fdl === "ready") { window.removeEventListener("message", onReady); res(); } };
+    const onReady = (ev: MessageEvent) => { if (ev.source !== window) return; if (ev.data?.__fdl === "ready") { window.removeEventListener("message", onReady); res(); } };
     window.addEventListener("message", onReady);
     const s = document.createElement("script");
     s.src = chrome.runtime.getURL("content/page-script.js");
@@ -19,7 +19,7 @@ let reqSeq = 0;
 function call(kind: string, extra: Record<string, unknown>): Promise<any> {
   const reqId = ++reqSeq;
   return new Promise((res) => {
-    const on = (ev: MessageEvent) => { if (ev.data?.__fdl === "res" && ev.data.reqId === reqId) { window.removeEventListener("message", on); res(ev.data); } };
+    const on = (ev: MessageEvent) => { if (ev.source !== window) return; if (ev.data?.__fdl === "res" && ev.data.reqId === reqId) { window.removeEventListener("message", on); res(ev.data); } };
     window.addEventListener("message", on);
     window.postMessage({ __fdl: "req", reqId, kind, csrf: csrf(), ...extra }, "*");
   });
