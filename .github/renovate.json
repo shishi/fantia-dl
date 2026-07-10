@@ -3,34 +3,42 @@
   "extends": [
     "config:recommended",
     "helpers:pinGitHubActionDigests",
+    ":dependencyDashboard",
     ":semanticCommits",
-    ":timezone(Asia/Tokyo)"
+    ":timezone(Asia/Tokyo)",
+    "schedule:weekly"
   ],
-  "schedule": [
-    "before 6am on monday"
-  ],
+  "labels": ["dependencies"],
+  "prConcurrentLimit": 5,
+  "prHourlyLimit": 2,
   "lockFileMaintenance": {
     "enabled": true,
-    "schedule": [
-      "before 6am on monday"
-    ]
+    "schedule": ["before 6am on monday"]
   },
   "nix": {
     "enabled": true
   },
   "packageRules": [
     {
+      "matchManagers": ["nix"],
+      "groupName": "nix flake inputs",
+      "commitMessageTopic": "nix flake input {{depName}}"
+    },
+    {
       "matchManagers": ["github-actions"],
+      "groupName": "github-actions",
       "pinDigests": true,
       "commitMessageTopic": "GitHub Action {{depName}}"
     },
     {
-      "matchManagers": ["nix"],
-      "commitMessageTopic": "Nix input {{depName}}"
+      "matchManagers": ["bun"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "bun dependencies"
     },
     {
-      "matchManagers": ["bun", "npm"],
-      "commitMessageTopic": "{{depName}}"
+      "matchManagers": ["bun"],
+      "matchUpdateTypes": ["major"],
+      "groupName": "bun major updates"
     }
   ]
 }
