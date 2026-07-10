@@ -44,7 +44,6 @@ export interface Settings {
   pathTemplate: string;
   illegalCharReplacement: string;
   conflictAction: "uniquify" | "overwrite";
-  strictCollisionCheck: boolean;
   contentTypes: { photo: boolean; file: boolean; video: boolean };
   segmentMaxLen: number;
   fullPathMaxLen: number;

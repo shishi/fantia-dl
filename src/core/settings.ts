@@ -4,7 +4,6 @@ export const DEFAULT_SETTINGS: Settings = {
   pathTemplate: "fantia/$creator/$date{YYYYMMDD}_$postTitle/$contentTitle/[$seq{3}_]$filename.$ext",
   illegalCharReplacement: "_",
   conflictAction: "uniquify",
-  strictCollisionCheck: false,
   contentTypes: { photo: true, file: true, video: true },
   segmentMaxLen: 200,
   fullPathMaxLen: 180,

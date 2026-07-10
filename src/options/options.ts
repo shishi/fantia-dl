@@ -35,7 +35,6 @@ async function init() {
   ($("ct_photo") as HTMLInputElement).checked = cur.contentTypes.photo;
   ($("ct_file") as HTMLInputElement).checked = cur.contentTypes.file;
   ($("ct_video") as HTMLInputElement).checked = cur.contentTypes.video;
-  ($("strict") as HTMLInputElement).checked = cur.strictCollisionCheck;
   ["tpl", "repl", "conflict"].forEach((id) => $(id).addEventListener("input", updatePreview));
   updatePreview();
   $("save").addEventListener("click", async () => {
@@ -45,7 +44,6 @@ async function init() {
       illegalCharReplacement: ($("repl") as HTMLInputElement).value || "_",
       conflictAction: ($("conflict") as HTMLSelectElement).value as any,
       contentTypes: { photo: ($("ct_photo") as HTMLInputElement).checked, file: ($("ct_file") as HTMLInputElement).checked, video: ($("ct_video") as HTMLInputElement).checked },
-      strictCollisionCheck: ($("strict") as HTMLInputElement).checked,
     };
     await saveSettings(cur);
     $("saved").textContent = "保存しました";
