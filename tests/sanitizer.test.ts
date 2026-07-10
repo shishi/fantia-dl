@@ -24,7 +24,7 @@ describe("sanitizeSegment", () => {
   });
   it("NFC 正規化する", () => {
     // か(U+304B) + 濁点(U+3099) -> NFC で が(U+304C)
-    expect(sanitizeSegment("が", O)).toBe("が");
+    expect(sanitizeSegment("が", O)).toBe("が");
   });
   it("maxLen で切り詰める", () => {
     expect([...sanitizeSegment("a".repeat(300), O)]).toHaveLength(200);
