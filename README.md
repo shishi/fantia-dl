@@ -5,17 +5,9 @@ Fantia の投稿(自分がアクセス権を持つコンテンツ)をテンプ�
 ## セットアップ
 
 拡張本体は Chrome の V8 で動くので **開発 OS は問わない**(Windows / macOS / Linux で開発可能)。
-ビルドツール(esbuild / vitest / tsc)だけ Node.js または Bun ランタイムが必要。
+ビルドツール(esbuild / vitest / tsc)だけ Bun ランタイムが必要。Node.js は不要 —— ツールチェーンは Bun 専用。
 
-### 選択肢A: Node.js + npm(標準)
-
-前提: Node.js 24 以上、npm 11 以上
-
-```
-npm install && npm run build
-```
-
-### 選択肢B: Bun
+### 選択肢A: Bun
 
 前提: Bun がインストール済み
 
@@ -23,17 +15,17 @@ npm install && npm run build
 bun install && bun scripts/build.mjs
 ```
 
-### 選択肢C: Nix(flake + direnv)
+### 選択肢B: Nix(flake + direnv)
 
 前提: nix (flakes 有効) と direnv
 
 ```
 echo "use flake" > .envrc  # 既に含まれる
 direnv allow                # 初回だけ
-npm install && npm run build
+bun install && bun scripts/build.mjs
 ```
 
-`nix develop` で手動で shell に入っても同じ。Node.js 24 と Bun 両方入りの環境が立ち上がる。
+`nix develop` で手動で shell に入っても同じ。Bun のみの環境が立ち上がる。
 
 ### 拡張のインストール
 

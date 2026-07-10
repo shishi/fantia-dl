@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Install
+        run: bun install --frozen-lockfile
+      - name: Typecheck
+        run: bunx tsc --noEmit
+      - name: Test
+        run: bunx vitest run
+      - name: Build
+        run: bun scripts/build.mjs
+      - name: Verify dist artifacts
+        run: |
+          for f in \
+            dist/manifest.json \
+            dist/background/service-worker.js \
+            dist/content/content-script.js \
+            dist/content/page-script.js \
+            dist/options/options.js \
+            dist/options/options.html \
+          ; do
+            test -f "$f" || { echo "missing: $f"; exit 1; }
+          done

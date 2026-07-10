@@ -6,7 +6,7 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "build": "node scripts/build.mjs",
+    "build": "bun scripts/build.mjs",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
