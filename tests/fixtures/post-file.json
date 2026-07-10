@@ -1,0 +1,16 @@
+{
+  "post": {
+    "id": 4140985,
+    "title": "進捗9",
+    "posted_at": "2026-07-08T10:00:00+09:00",
+    "fanclub": { "id": 999, "creator_name": "blendy", "fanclub_name": "テストFC" },
+    "post_contents": [
+      {
+        "id": 7564699, "title": "", "category": "file", "visible_status": "visible",
+        "plan": { "name": "無料プラン", "price": 0 },
+        "filename": "進捗9F.mp4",
+        "download_uri": "/posts/4140985/download/7564699"
+      }
+    ]
+  }
+}

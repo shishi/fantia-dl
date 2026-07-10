@@ -1,0 +1,22 @@
+{
+  "post": {
+    "id": 4135924,
+    "title": "テスト投稿",
+    "posted_at": "2026-07-07T00:32:13+09:00",
+    "fanclub": { "id": 1736, "creator_name": "C-Low", "fanclub_name": "カラスモドキ保護の会" },
+    "post_contents": [
+      {
+        "id": 7554167, "title": "ギャラリー", "category": "photo_gallery", "visible_status": "visible",
+        "plan": { "name": "無料プラン", "price": 0 },
+        "post_content_photos": [
+          { "id": 1, "url": { "original": "https://cc.fantia.jp/uploads/x/aaa.png?Signature=z" } },
+          { "id": 2, "url": { "original": "https://cc.fantia.jp/uploads/x/bbb.png?Signature=z" } }
+        ]
+      },
+      {
+        "id": 7554168, "title": "ロック", "category": "photo_gallery", "visible_status": "catchable",
+        "plan": { "name": "有料プラン", "price": 200 }, "post_content_photos": []
+      }
+    ]
+  }
+}

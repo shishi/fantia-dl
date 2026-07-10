@@ -5,6 +5,7 @@
     "moduleResolution": "bundler",
     "strict": true,
     "noUnusedLocals": true,
+    "resolveJsonModule": true,
     "types": ["chrome", "vitest/globals"],
     "lib": ["ES2022", "DOM"],
     "skipLibCheck": true
