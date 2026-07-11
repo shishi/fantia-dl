@@ -31,6 +31,13 @@ export interface EnqueueMessage {
   force?: boolean;
 }
 
+// options ページから SW へ「DL 履歴を全部クリア」を依頼するメッセージ。
+// jobs キーへの書き込みは SW だけが行う不変条件を保つため、options.ts は
+// chrome.storage.local を直接叩かずこのメッセージ経由で SW に処理させる。
+export interface ClearHistoryMessage {
+  kind: "clearHistory";
+}
+
 // zip 化した photo gallery を background に渡して chrome.downloads.download させる。
 // content-script は downloads API にアクセスできない(拡張ページ/SW 限定)ため、
 // Blob 生成 + downloads.download 呼び出しは background 側で行う。

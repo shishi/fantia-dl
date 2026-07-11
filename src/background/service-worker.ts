@@ -4,7 +4,7 @@ import { validatePath } from "../core/path-validator";
 import type { RenderContext, Settings } from "../core/types";
 import type { EnqueueMessage, EnqueueItem, PostMeta, ZipPortMessage, ZipPortResult } from "../content/messages";
 import { ZIP_PORT_NAME } from "../content/messages";
-import { getAllJobs, putJobs, updateJob, findByDownloadId, removeJobsByPostId, type JobRecord } from "./job-store";
+import { getAllJobs, putJobs, updateJob, findByDownloadId, removeJobsByPostId, sweepOldDoneJobs, clearAllJobs, type JobRecord } from "./job-store";
 import { OFFSCREEN_TARGET } from "../offscreen/protocol";
 import type {
   OffscreenAbortMessage,
@@ -206,6 +206,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       .then(sendResponse)
       .catch((e) => sendResponse({ queued: 0, error: String(e) }));
     return true;
+  } else if (msg?.kind === "clearHistory") {
+    clearAllJobs()
+      .then(() => sendResponse({ ok: true }))
+      .catch((e) => sendResponse({ ok: false, error: String(e) }));
+    return true;
   }
   return false;
 });
@@ -225,7 +230,7 @@ chrome.downloads.onChanged.addListener(async (delta) => {
 
   const j = await findByDownloadId(delta.id);
   if (!j) return;
-  if (cur === "complete") await updateJob(j.idemKey, { state: "done" });
+  if (cur === "complete") await updateJob(j.idemKey, { state: "done", doneAt: Date.now() });
   else {
     // photo は署名 URL 失効の可能性 -> needs_page で退避。file は download_uri 安定なので error 記録。
     await updateJob(j.idemKey, { state: j.contentType === "photo" ? "needs_page" : "error", error: "interrupted" });
@@ -258,7 +263,10 @@ chrome.downloads.onChanged.addListener(async (delta) => {
     if (j.downloadId == null) { await startDownload(j, s); continue; }
     const [d] = await chrome.downloads.search({ id: j.downloadId });
     if (!d) { await startDownload(j, s); continue; }
-    if (d.state === "complete") await updateJob(j.idemKey, { state: "done" });
+    if (d.state === "complete") await updateJob(j.idemKey, { state: "done", doneAt: Date.now() });
     else if (d.state === "interrupted") await updateJob(j.idemKey, { state: j.contentType === "photo" ? "needs_page" : "error" });
   }
+  // 完了から 1 年以上経過した done ジョブを間引く(chrome.storage.local の肥大化防止)。
+  // doneAt を持たないレガシー done ジョブはここでは触らない(job-store.ts 参照)。
+  await sweepOldDoneJobs(365 * 24 * 60 * 60 * 1000);
 })();
