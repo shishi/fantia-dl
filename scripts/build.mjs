@@ -8,6 +8,7 @@ const entries = [
   { in: "src/content/page-script.ts",       out: "dist/content/page-script.js",       format: "iife" },
   { in: "src/background/service-worker.ts", out: "dist/background/service-worker.js", format: "esm" },
   { in: "src/options/options.ts",           out: "dist/options/options.js",           format: "esm" },
+  { in: "src/offscreen/offscreen.ts",       out: "dist/offscreen/offscreen.js",       format: "iife" },
 ];
 
 for (const e of entries) {

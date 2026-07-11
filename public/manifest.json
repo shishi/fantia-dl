@@ -3,7 +3,7 @@
   "name": "fantia-dl",
   "version": "0.1.0",
   "description": "Fantia の投稿をテンプレート命名で自動ダウンロード(個人アーカイブ用)",
-  "permissions": ["downloads", "storage"],
+  "permissions": ["downloads", "storage", "offscreen"],
   "host_permissions": ["https://fantia.jp/*"],
   "background": { "service_worker": "background/service-worker.js", "type": "module" },
   "content_scripts": [

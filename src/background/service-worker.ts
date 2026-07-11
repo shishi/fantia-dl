@@ -4,8 +4,15 @@ import { validatePath } from "../core/path-validator";
 import type { RenderContext, Settings } from "../core/types";
 import type { EnqueueMessage, EnqueueItem, PostMeta, ZipPortMessage, ZipPortResult } from "../content/messages";
 import { ZIP_PORT_NAME } from "../content/messages";
-import { base64ToBytes } from "../core/base64";
 import { getAllJobs, putJobs, updateJob, findByDownloadId, removeJobsByPostId, type JobRecord } from "./job-store";
+import { OFFSCREEN_TARGET } from "../offscreen/protocol";
+import type {
+  OffscreenAbortMessage,
+  OffscreenChunkMessage,
+  OffscreenDoneMessage,
+  OffscreenRevokeMessage,
+  OffscreenResult,
+} from "../offscreen/protocol";
 
 function ctxOf(post: PostMeta, it: EnqueueItem): RenderContext {
   return {
@@ -63,57 +70,135 @@ async function startDownload(j: JobRecord, s: Settings): Promise<void> {
   }
 }
 
-// zip 化した photo gallery の DL。content-script は downloads API を持たないため
-// ここで Blob 化 + chrome.downloads.download を行う。job-store は通さない
-// (dedup/reconcile 対象外の一発勝負。失敗時はユーザーが 🔄 で再実行する)。
+// --- zip 化した photo gallery の DL -----------------------------------------
 //
-// zip 本体は Port 経由で start -> chunk* -> end のチャンクとして届く
-// (1 メッセージに収めると runtime messaging のサイズ上限で大きい gallery が落ちるため)。
-async function finishZipDownload(filename: string, conflictAction: "uniquify" | "overwrite", chunks: Uint8Array<ArrayBuffer>[]): Promise<ZipPortResult> {
-  const blob = new Blob(chunks, { type: "application/zip" });
-  const blobUrl = URL.createObjectURL(blob);
-  try {
-    const downloadId = await chrome.downloads.download({
-      url: blobUrl, filename, saveAs: false, conflictAction,
+// Service Worker には DOM が無く URL.createObjectURL が使えない(MV3 の既知の
+// 制約)ため、Blob 組み立て + object URL 発行は Offscreen Document に委譲する。
+// job-store は通さない(dedup/reconcile 対象外の一発勝負。失敗時はユーザーが
+// 🔄 で再実行する)。
+//
+// zip 本体は content-script から Port 経由で start -> chunk* -> end の
+// チャンク(base64 文字列)として届く。ここではデコードせず、受け取った base64
+// をそのまま offscreen document へ転送する(SW 側でデコード/再エンコードする
+// 手間もメモリコピーも不要になる)。
+const zipDownloads = new Map<number, string>(); // downloadId -> blobUrl のインメモリキャッシュ (同時に複数 zip DL が走っても取り違えないように)
+
+// zipDownloads は module-level の Map なので、MV3 の Service Worker がアイドルで
+// サスペンド/再起動すると失われる。blob URL は offscreen document(常駐)側に
+// 生き続けているため、それを覚えている側だけが消えると revoke されず永久にリークする。
+// chrome.storage.session はブラウザセッション終了時に自動でクリアされ、offscreen
+// document の blob URL の寿命(=ブラウザプロセスが生きている間)とちょうど一致するため、
+// ここに書き込むたびに同期し、SW 起動時に読み戻す。
+const ZIP_DOWNLOADS_STORAGE_KEY = "zipDownloads";
+
+async function persistZipDownloads(): Promise<void> {
+  await chrome.storage.session.set({ [ZIP_DOWNLOADS_STORAGE_KEY]: Object.fromEntries(zipDownloads) });
+}
+
+async function loadZipDownloads(): Promise<void> {
+  const r = await chrome.storage.session.get(ZIP_DOWNLOADS_STORAGE_KEY);
+  const obj = (r?.[ZIP_DOWNLOADS_STORAGE_KEY] as Record<string, string>) ?? {};
+  for (const [id, url] of Object.entries(obj)) zipDownloads.set(Number(id), url);
+}
+
+// hasDocument() で確認してから createDocument() を呼ぶ素朴な実装だと、複数の
+// zip DL がほぼ同時に始まった場合(別タブなど)に両方が hasDocument()=false を
+// 観測して両方 createDocument() を呼び、片方が「offscreen document は1つまで」
+// エラーで失敗しうる。呼び出しごとに新しい判定をせず、進行中/完了済みの
+// 生成 Promise を使い回すことでこの競合を防ぐ。
+let offscreenReadyPromise: Promise<void> | null = null;
+
+function ensureOffscreenDocument(): Promise<void> {
+  if (!offscreenReadyPromise) {
+    offscreenReadyPromise = (async () => {
+      if (await chrome.offscreen.hasDocument()) return;
+      await chrome.offscreen.createDocument({
+        url: chrome.runtime.getURL("offscreen/offscreen.html"),
+        reasons: [chrome.offscreen.Reason.BLOBS],
+        justification: "zip Blob を組み立てて downloads.download 用の object URL を作るため(Service Worker には URL.createObjectURL が無い)",
+      });
+    })().catch((e) => {
+      offscreenReadyPromise = null; // 失敗時は次回呼び出しで再試行できるようにリセット
+      throw e;
     });
-    const onChanged = (delta: chrome.downloads.DownloadDelta) => {
-      if (delta.id !== downloadId) return;
-      const cur = delta.state?.current;
-      // "in_progress" 段階で revoke すると転送中の大きい zip が中断されうるため、
-      // 終端状態(complete/interrupted)になってから revoke する。
-      if (cur === "complete" || cur === "interrupted") {
-        URL.revokeObjectURL(blobUrl);
-        chrome.downloads.onChanged.removeListener(onChanged);
-      }
-    };
-    chrome.downloads.onChanged.addListener(onChanged);
+  }
+  return offscreenReadyPromise;
+}
+
+function sendChunkToOffscreen(jobId: string, base64: string): Promise<unknown> {
+  return chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET, kind: "zipChunk", jobId, base64,
+  } satisfies OffscreenChunkMessage);
+}
+
+async function finishZipDownload(jobId: string, filename: string, conflictAction: "uniquify" | "overwrite"): Promise<ZipPortResult> {
+  const res = (await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET, kind: "zipDone", jobId, mimeType: "application/zip",
+  } satisfies OffscreenDoneMessage)) as OffscreenResult | undefined;
+
+  if (!res || !res.ok) {
+    return { queued: 0, error: res?.error ?? "offscreen document から応答がありませんでした" };
+  }
+
+  const blobUrl = res.url;
+  try {
+    const downloadId = await chrome.downloads.download({ url: blobUrl, filename, saveAs: false, conflictAction });
+    zipDownloads.set(downloadId, blobUrl);
+    await persistZipDownloads();
     return { queued: 1 };
   } catch (e) {
     // downloads.download 自体が失敗した場合は onChanged が発火しないため、ここで revoke してリークを防ぐ。
-    URL.revokeObjectURL(blobUrl);
+    await revokeOffscreenUrl(blobUrl);
     return { queued: 0, error: String(e) };
   }
+}
+
+function revokeOffscreenUrl(url: string): Promise<unknown> {
+  return chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET, kind: "revoke", url,
+  } satisfies OffscreenRevokeMessage).catch(() => {});
+}
+
+function discardOffscreenJob(jobId: string): Promise<unknown> {
+  return chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET, kind: "zipAbort", jobId,
+  } satisfies OffscreenAbortMessage).catch(() => {});
 }
 
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== ZIP_PORT_NAME) return;
   let filename = "";
   let conflictAction: "uniquify" | "overwrite" = "uniquify";
-  const chunks: Uint8Array<ArrayBuffer>[] = [];
+  const jobId = crypto.randomUUID();
+  // Port 上のメッセージ順序は保証されるが、各メッセージを chrome.runtime.sendMessage で
+  // offscreen へ転送する処理は非同期なので、そのまま fire-and-forget すると転送順序が
+  // 前後しうる。ここで直列に繋いで順序を保つ。
+  let chain: Promise<unknown> = Promise.resolve();
+  let ended = false;
+
   port.onMessage.addListener((msg: ZipPortMessage) => {
     if (msg.kind === "start") {
       filename = msg.filename;
       conflictAction = msg.conflictAction;
+      chain = ensureOffscreenDocument();
     } else if (msg.kind === "chunk") {
-      chunks.push(base64ToBytes(msg.data));
+      chain = chain.then(() => sendChunkToOffscreen(jobId, msg.data));
     } else if (msg.kind === "end") {
-      finishZipDownload(filename, conflictAction, chunks)
+      ended = true;
+      chain
+        .then(() => finishZipDownload(jobId, filename, conflictAction))
         .then((res) => { try { port.postMessage(res); } catch {} })
         .catch((e) => { try { port.postMessage({ queued: 0, error: String(e) } as ZipPortResult); } catch {} });
     }
   });
-});
 
+  port.onDisconnect.addListener(() => {
+    // "end" を送らずに切断された(タブクローズ/エラー等)場合、offscreen document
+    // 側に溜まった未完了チャンクを破棄させる。放置すると常駐ページなのでリークする。
+    if (ended) return;
+    chain.then(() => discardOffscreenJob(jobId)).catch(() => {});
+  });
+});
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.kind === "enqueue") {
@@ -127,16 +212,43 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
 chrome.downloads.onChanged.addListener(async (delta) => {
   if (!delta.state) return;
+  const cur = delta.state.current;
+  if (cur !== "complete" && cur !== "interrupted") return;
+
+  const zipUrl = zipDownloads.get(delta.id);
+  if (zipUrl !== undefined) {
+    zipDownloads.delete(delta.id);
+    await persistZipDownloads();
+    await revokeOffscreenUrl(zipUrl);
+    return;
+  }
+
   const j = await findByDownloadId(delta.id);
   if (!j) return;
-  if (delta.state.current === "complete") await updateJob(j.idemKey, { state: "done" });
-  else if (delta.state.current === "interrupted") {
+  if (cur === "complete") await updateJob(j.idemKey, { state: "done" });
+  else {
     // photo は署名 URL 失効の可能性 -> needs_page で退避。file は download_uri 安定なので error 記録。
     await updateJob(j.idemKey, { state: j.contentType === "photo" ? "needs_page" : "error", error: "interrupted" });
   }
 });
 
-// 起動時 reconcile
+// 起動時 reconcile (zip DL): SW がサスペンドしていた間に完了/中断していた zip DL は
+// onChanged を取りこぼしている可能性があるため、永続化しておいた downloadId を
+// 起動時に検査し、決着済みなら revoke してから zipDownloads/storage.session から
+// 取り除く。読み戻すだけで検査しないと、決着済みの blob URL がずっと残ってしまう。
+(async () => {
+  await loadZipDownloads();
+  for (const [downloadId, blobUrl] of [...zipDownloads]) {
+    const [d] = await chrome.downloads.search({ id: downloadId });
+    if (!d || d.state === "complete" || d.state === "interrupted") {
+      zipDownloads.delete(downloadId);
+      await revokeOffscreenUrl(blobUrl);
+    }
+  }
+  await persistZipDownloads();
+})();
+
+// 起動時 reconcile (通常 DL)
 (async () => {
   const s = await loadSettings();
   const all = await getAllJobs();
