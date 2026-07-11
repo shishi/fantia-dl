@@ -197,7 +197,7 @@ sanitize 後の相対パス全体に対し、chrome.downloads の制約を満た
 
 ## 12. Phase-0 PoC 結果（2026-07-10 実施・§11/§13 に反映済み）
 
-ログイン済み Browser でサンプル投稿（posts/4135924=photo_gallery, posts/4140985=file/.mp4）を
+ログイン済み Browser でサンプル投稿（posts/1234567=photo_gallery, posts/2345678=file/.mp4）を
 実測。主要不明点は解消。
 
 - **認証形（確定）**: `GET /api/v1/posts/{postId}` はヘッダ無しだと **422**、
@@ -209,7 +209,7 @@ sanitize 後の相対パス全体に対し、chrome.downloads の制約を満た
 - **photo（確定）**: `post_content_photos[].url` は `original/large/main/medium/micro/thumb/thumb_webp` の多サイズ。
   原寸は `original`。**署名付き CloudFront 直リンク（Key-Pair-Id/Policy/Signature、期限つき）**。
   元ファイル名は UUID のため `$filename` は URL basename、`$ext` は URL 末尾から導出。
-- **file（確定）**: `category:"file"`、`filename` は人間可読（例 `進捗9F.mp4`）、`download_uri` は
+- **file（確定）**: `category:"file"`、`filename` は人間可読（例 `video_a.mp4`）、`download_uri` は
   `/posts/{postId}/download/{contentId}`。GET follow で **302→署名付き実体URL→200**（content-length 実測 ~33MB）。
   **download_uri は毎回サーバ側で再解決される安定エンドポイント＝期限切れの心配が無い**。
   `Content-Disposition` は付かないため、保存名は本ツール側で付与する。

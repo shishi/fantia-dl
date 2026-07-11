@@ -2,11 +2,11 @@ import { renderTemplate, TemplateError } from "../src/core/template-engine";
 import type { RenderContext } from "../src/core/types";
 
 const base: RenderContext = {
-  creator: "C-Low", creatorId: "1736",
-  postTitle: "テスト投稿", postId: "4135924",
-  postedAt: new Date("2026-07-07T00:32:13+09:00"),
+  creator: "sample_creator", creatorId: "1234",
+  postTitle: "テスト投稿", postId: "1234567",
+  postedAt: new Date("2026-01-15T12:30:00+09:00"),
   now: new Date("2026-07-10T12:00:00+09:00"),
-  contentTitle: "ギャラリー", contentId: "7554167", contentType: "photo", plan: "無料プラン",
+  contentTitle: "ギャラリー", contentId: "42", contentType: "photo", plan: "無料プラン",
   filename: "foo", ext: "png", seq: 1, total: 4,
 };
 const O = { replacement: "_", segmentMaxLen: 200 };
@@ -14,11 +14,11 @@ const O = { replacement: "_", segmentMaxLen: 200 };
 describe("renderTemplate", () => {
   it("基本プレースホルダを展開する", () => {
     expect(renderTemplate("$creator/$postId/$filename.$ext", base, O))
-      .toBe("C-Low/4135924/foo.png");
+      .toBe("sample_creator/1234567/foo.png");
   });
   it("$date{FMT} を投稿日で展開する", () => {
-    expect(renderTemplate("$date{YYYYMMDD}", base, O)).toBe("20260707");
-    expect(renderTemplate("$date{YYYY-MM-DD}", base, O)).toBe("2026-07-07");
+    expect(renderTemplate("$date{YYYYMMDD}", base, O)).toBe("20260115");
+    expect(renderTemplate("$date{YYYY-MM-DD}", base, O)).toBe("2026-01-15");
   });
   it("$today{FMT} を実行日で展開する", () => {
     expect(renderTemplate("$today{YYYYMMDD}", base, O)).toBe("20260710");
