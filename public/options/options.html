@@ -1,25 +1,43 @@
 <!doctype html>
 <html lang="ja"><head><meta charset="utf-8"><title>fantia-dl 設定</title>
-<style>body{font-family:sans-serif;max-width:720px;margin:24px auto;padding:0 16px}label{display:block;margin:12px 0 4px;font-weight:bold}input[type=text]{width:100%;padding:6px}.preview{background:#f4f4f4;padding:8px;border-radius:6px;white-space:pre-wrap}.err{color:#c00}.note{color:#666;font-size:13px}</style>
+<style>body{font-family:sans-serif;max-width:720px;margin:24px auto;padding:0 16px}label{display:block;margin:12px 0 4px;font-weight:bold}input[type=text]{width:100%;padding:6px}.preview{background:#f4f4f4;padding:8px;border-radius:6px;white-space:pre-wrap;font-size:13px}.err{color:#c00;font-size:13px;min-height:1em}.note{color:#666;font-size:13px}.tpl-group{margin-bottom:16px}</style>
 </head><body>
 <h1>fantia-dl 設定</h1>
-<label>保存パステンプレート</label>
-<input id="tpl" type="text">
+
+<div class="tpl-group">
+  <label>① 通常保存パステンプレート(単体ファイル DL 時)</label>
+  <input id="tpl" type="text">
+  <div>プレビュー: <span id="preview" class="preview"></span></div>
+  <div id="tplErr" class="err"></div>
+</div>
+
+<div class="tpl-group">
+  <label>② zip ファイルのパステンプレート(複数枚 photo を zip 化するとき)</label>
+  <input id="zip_path_tpl" type="text">
+  <div>プレビュー: <span id="zip_path_preview" class="preview"></span></div>
+  <div id="zipPathErr" class="err"></div>
+</div>
+
+<div class="tpl-group">
+  <label>③ zip 内エントリの命名テンプレート(zip の中身のファイル名)</label>
+  <input id="zip_entry_tpl" type="text">
+  <div>プレビュー: <span id="zip_entry_preview" class="preview"></span></div>
+  <div id="zipEntryErr" class="err"></div>
+</div>
+
 <p class="note">プレースホルダ: $creator $creatorId $postTitle $postId $date{YYYYMMDD} $today{} $contentTitle $contentId $contentType $plan $filename $ext $seq $seq{3} $total / オプショナルグループ [ ... ]</p>
-<div>プレビュー: <span id="preview" class="preview"></span></div>
-<div id="tplErr" class="err"></div>
+
 <label>禁止文字の置換</label><input id="repl" type="text">
+
 <label>衝突時の挙動</label>
 <select id="conflict"><option value="uniquify">uniquify(連番付与・推奨)</option><option value="overwrite">overwrite(上書き・注意)</option></select>
+
 <label>対象コンテンツ</label>
 <label class="note"><input type="checkbox" id="ct_photo"> 画像</label>
 <label class="note"><input type="checkbox" id="ct_file"> ファイル</label>
 <label class="note"><input type="checkbox" id="ct_video"> 動画(file .mp4 等)</label>
 <label class="note"><input type="checkbox" id="zip_galleries"> 複数枚 photo は zip にまとめる</label>
-<label>zip ファイルのパステンプレート</label>
-<input id="zip_path_tpl" type="text">
-<label>zip 内エントリの命名テンプレート</label>
-<input id="zip_entry_tpl" type="text">
+
 <p class="note">⚠ 保存ダイアログが出る場合は Chrome 設定「ダウンロード前に各ファイルの保存場所を確認する」を OFF にしてください。拡張からは強制できません。</p>
 <p><button id="save">保存</button> <span id="saved" class="note"></span></p>
 <script type="module" src="./options.js"></script>
