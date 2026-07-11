@@ -46,17 +46,17 @@ code{background:#eaeaea;padding:1px 4px;border-radius:3px;font-size:12px;font-fa
 <table class="ph-table">
 <thead><tr><th>記号</th><th>意味</th><th>例</th></tr></thead>
 <tbody>
-<tr><td><code>$creator</code></td><td>クリエイター名</td><td>C-Low</td></tr>
-<tr><td><code>$creatorId</code></td><td>ファンクラブ ID</td><td>1736</td></tr>
-<tr><td><code>$postTitle</code></td><td>記事タイトル</td><td>進捗9</td></tr>
-<tr><td><code>$postId</code></td><td>記事 ID</td><td>4135924</td></tr>
-<tr><td><code>$date{書式}</code></td><td>投稿日を書式で展開</td><td><code>$date{YYYYMMDD}</code> → 20260707</td></tr>
-<tr><td><code>$today{書式}</code></td><td>実行日を書式で展開</td><td><code>$today{YYYY-MM-DD}</code> → 2026-07-11</td></tr>
+<tr><td><code>$creator</code></td><td>クリエイター名</td><td>sample_creator</td></tr>
+<tr><td><code>$creatorId</code></td><td>ファンクラブ ID</td><td>1234</td></tr>
+<tr><td><code>$postTitle</code></td><td>記事タイトル</td><td>サンプル投稿</td></tr>
+<tr><td><code>$postId</code></td><td>記事 ID</td><td>1234567</td></tr>
+<tr><td><code>$date{書式}</code></td><td>投稿日を書式で展開</td><td><code>$date{YYYYMMDD}</code> → 20260115</td></tr>
+<tr><td><code>$today{書式}</code></td><td>実行日を書式で展開</td><td><code>$today{YYYY-MM-DD}</code> → 2026-07-11 (実行日)</td></tr>
 <tr><td><code>$contentTitle</code></td><td>コンテンツブロック名</td><td>ギャラリー</td></tr>
-<tr><td><code>$contentId</code></td><td>コンテンツ ID</td><td>7554167</td></tr>
+<tr><td><code>$contentId</code></td><td>コンテンツ ID</td><td>42</td></tr>
 <tr><td><code>$contentType</code></td><td>photo / file / video のいずれか</td><td>photo</td></tr>
 <tr><td><code>$plan</code></td><td>支援プラン名</td><td>無料プラン</td></tr>
-<tr><td><code>$filename</code></td><td>ファイル名(拡張子除く)。photo は UUID basename、file/video は投稿者が upload した元名</td><td>aaa / 進捗9F</td></tr>
+<tr><td><code>$filename</code></td><td>ファイル名(拡張子除く)。photo は UUID basename、file/video は投稿者が upload した元名</td><td>image / video_a</td></tr>
 <tr><td><code>$ext</code></td><td>拡張子(ドットなし)</td><td>png / mp4</td></tr>
 <tr><td><code>$seq</code></td><td>ブロック内の連番(2 件以上ある時のみ、単一なら空)</td><td>2</td></tr>
 <tr><td><code>$seq{N}</code></td><td>N 桁ゼロ詰めの連番</td><td><code>$seq{3}</code> → 002</td></tr>
@@ -76,7 +76,7 @@ code{background:#eaeaea;padding:1px 4px;border-radius:3px;font-size:12px;font-fa
 <li><code>MM</code> ゼロ詰め 2 桁月 / <code>M</code> ゼロ詰めなし月</li>
 <li><code>DD</code> ゼロ詰め 2 桁日 / <code>D</code> ゼロ詰めなし日</li>
 <li><code>HH</code> 時 / <code>mm</code> 分 / <code>ss</code> 秒</li>
-<li>例:<code>$date{YYYY-MM-DD_HHmm}</code> → 2026-07-07_0032</li>
+<li>例:<code>$date{YYYY-MM-DD_HHmm}</code> → 2026-01-15_1230</li>
 </ul>
 
 <p><b>オプショナルグループ <code>[ ... ]</code></b>:内側にプレースホルダを 1 つ以上含む場合、そのいずれかが空文字に解決したら <b>[...] ごと消える</b>。単一 photo で <code>$seq</code> が空になった時に連番プレフィックスも一緒に消したい、みたいなユースケース用。</p>

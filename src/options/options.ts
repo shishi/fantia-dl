@@ -7,10 +7,10 @@ import type { RenderContext, Settings } from "../core/types";
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
 const singleSample: RenderContext = {
-  creator: "C-Low", creatorId: "1736", postTitle: "サンプル投稿", postId: "4135924",
-  postedAt: new Date("2026-07-07T00:32:13+09:00"), now: new Date(),
-  contentTitle: "ギャラリー", contentId: "7554167", contentType: "photo", plan: "無料プラン",
-  filename: "aaa", ext: "png", seq: 2, total: 4,
+  creator: "sample_creator", creatorId: "1234", postTitle: "サンプル投稿", postId: "1234567",
+  postedAt: new Date("2026-01-15T12:30:00+09:00"), now: new Date(),
+  contentTitle: "ギャラリー", contentId: "42", contentType: "photo", plan: "無料プラン",
+  filename: "image", ext: "png", seq: 2, total: 4,
 };
 
 const zipPathSample: RenderContext = {
