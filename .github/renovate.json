@@ -54,7 +54,12 @@
       "matchUpdateTypes": [
         "major"
       ],
-      "groupName": "bun major updates"
+      "groupName": "bun major updates",
+      "minimumReleaseAge": "7 days"
     }
-  ]
+  ],
+  "minimumReleaseAge": "3 days",
+  "vulnerabilityAlerts": {
+    "minimumReleaseAge": "0"
+  }
 }
