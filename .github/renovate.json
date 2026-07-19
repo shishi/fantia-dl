@@ -56,10 +56,28 @@
       ],
       "groupName": "bun major updates",
       "minimumReleaseAge": "7 days"
+    },
+    {
+      "matchUpdateTypes": [
+        "patch",
+        "minor"
+      ],
+      "automerge": true,
+      "automergeType": "pr",
+      "platformAutomerge": true
+    },
+    {
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "automerge": false
     }
   ],
   "minimumReleaseAge": "3 days",
   "vulnerabilityAlerts": {
-    "minimumReleaseAge": "0"
+    "minimumReleaseAge": "0",
+    "automerge": true,
+    "automergeType": "pr",
+    "platformAutomerge": true
   }
 }
