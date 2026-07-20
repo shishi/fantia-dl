@@ -69,6 +69,13 @@ fanbox-dl で次の 3 つが実証された:
      content-script の zip 生成時に **zip ファイル名(zipPath)と各 entry 名の両方を
      `validatePath` で検証**し、不合格ならその zip をエラーとして中断する
      (エラーメッセージは既存の zip エラー表示経路に乗せる)。
+     **検証モードの使い分け(adversarial レビュー round5 指摘)**: zipPath は実際に
+     `chrome.downloads.download` を通るため uniquify 前提(`uniquifyHeadroom` 減算あり)で
+     検証する。一方 **entry 名はアーカイブ内部の名前**で uniquify サフィックスが付かないため、
+     headroom 減算を無効にして検証する(fanbox-dl の zip 実装と同じく
+     `conflictAction: "overwrite"` 相当で validatePath を呼ぶ)。uniquify 扱いで entry を
+     検証すると `(segmentMaxLen - uniquifyHeadroom, segmentMaxLen]` の長さの正当な entry 名が
+     誤って拒否され、zip 全体が不当に中断される。
 5. 失敗した DL の復旧はユーザーの再クリック(そのとき photo の署名 URL も新規取得される)。
 
 ### migration(fantia 固有)
