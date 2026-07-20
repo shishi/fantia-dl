@@ -55,11 +55,20 @@ fanbox-dl で次の 3 つが実証された:
 4. **zip 経路の資源管理は無傷**: Port(start→chunk*→end)、offscreen document、blob URL の
    `zipDownloads` Map + storage.session 同期、zip の onChanged 分岐(revoke)、zip の
    起動時 reconcile。これらは dedup と無関係の資源管理(blob リーク防止)のため維持する。
-   **ただし 1 点だけプロトコルを変更する(adversarial レビュー round3 指摘)**:
-   `ZipStartMessage` の `conflictAction` フィールドを削除する。zip は Port 経由で
-   conflictAction を独自に運んでおり(content-script → SW → downloads.download)、ここを
-   残すと settings から消しても overwrite が表現可能なままになる。SW の zip DL も
-   `DOWNLOAD_CONFLICT_ACTION` 定数を直接使う(フィールド削除により型レベルで封鎖)。
+   **ただし 2 点だけ変更する**:
+   - **プロトコル(adversarial レビュー round3 指摘)**: `ZipStartMessage` の
+     `conflictAction` フィールドを削除する。zip は Port 経由で conflictAction を独自に
+     運んでおり(content-script → SW → downloads.download)、ここを残すと settings から
+     消しても overwrite が表現可能なままになる。SW の zip DL も
+     `DOWNLOAD_CONFLICT_ACTION` 定数を直接使う(フィールド削除により型レベルで封鎖)。
+   - **パス検証(adversarial レビュー round4 指摘)**: 現行の zip 経路は
+     `zipPathTemplate` / `zipEntryTemplate` の render 結果を **`validatePath` に通さず**
+     そのまま使っており、通常 DL(render → validatePath → download)とガード水準が
+     揃っていない。古い synced テンプレートが空セグメント・`.`/`..`・長すぎるパスを
+     生んでも素通りする。fanbox-dl が zip 実装で entry ごとの検証を足したのと同様に、
+     content-script の zip 生成時に **zip ファイル名(zipPath)と各 entry 名の両方を
+     `validatePath` で検証**し、不合格ならその zip をエラーとして中断する
+     (エラーメッセージは既存の zip エラー表示経路に乗せる)。
 5. 失敗した DL の復旧はユーザーの再クリック(そのとき photo の署名 URL も新規取得される)。
 
 ### migration(fantia 固有)
@@ -167,6 +176,8 @@ fantia-dl の既存方針(純粋関数のみ単体テスト、SW/DOM 配線は�
   (不正保存値 → `_` 強制)
 - settings テスト: allowlist merge が unknown キー(旧 `conflictAction` 含む)を落とすこと、
   `DOWNLOAD_CONFLICT_ACTION` が uniquify であること
+- zip パス検証は純粋部分(validatePath 自体)は既存テストがあるため、zip 経路への配線は
+  手動ゲートで確認(不正テンプレートで zip がエラー中断すること)
 - `tests/parse.test.ts`: idemKey / refetch 削除に合わせて期待値更新
 - 手動ゲート: 一覧ボタン表示・クリック DL・投稿ページ従来動作・zip・options
   (履歴 UI / conflictAction UI の消滅)
