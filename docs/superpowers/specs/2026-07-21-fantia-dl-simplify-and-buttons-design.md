@@ -80,14 +80,19 @@ fanbox-dl で次の 3 つが実証された:
      一覧ボタン(B)はこれを高密度な面から連打しやすくする。fanbox-dl の zip 実装が持つ
      **ソース総バイト数とファイル件数のバジェット**を移植する。上限値は fanbox-dl の
      実装値を初期値として流用する。
-   - **zip 失敗の統一フォールバック(adversarial レビュー round11 指摘)**: 現行 fantia の
-     ギャラリーは「zip 排他分岐」で、zip が失敗するとそのギャラリーが丸ごと未保存になる。
-     fanbox-dl(orchestrator)と同じく、**あらゆる zip 失敗(バジェット超過・zipPath/entry の
-     validatePath 不合格・offscreen 障害・Port 切断等)で、そのギャラリーを個別ファイル DL
+   - **zip 失敗の統一フォールバック(adversarial レビュー round11/round12 指摘)**: 現行
+     fantia のギャラリーは「zip 排他分岐」で、zip が失敗するとそのギャラリーが丸ごと
+     未保存になる。fanbox-dl(orchestrator)と同じく、**enqueue 前のあらゆる zip 失敗
+     (バジェット超過・zipPath/entry の validatePath 不合格・offscreen 障害・Port 切断・
+     `downloads.download()` 呼び出し自体の失敗)で、そのギャラリーを個別ファイル DL
      (既存の非 zip enqueue 経路)へフォールバック**する。個別 DL をスキップしてよいのは
-     zip が実際に成功したときだけ(fanbox-dl 原設計 §7b と同じ「zip 不成立時は個別 DL」の
-     統一意味論。ユーザーの目的は保存であって zip 形式ではないため)。フォールバック発生は
-     既存のエラー/通知表示経路でユーザーに伝える。
+     zip の enqueue が実際に成功したときだけ(fanbox-dl 原設計 §7b と同じ意味論。ユーザーの
+     目的は保存であって zip 形式ではないため)。フォールバック発生は既存のエラー/通知表示
+     経路でユーザーに伝える。
+     **範囲の限定(round12 指摘)**: enqueue 成功**後**に blob DL が `onChanged` で
+     interrupted になるケースは対象外(fanbox-dl と同じ。blob revoke のクリーンアップのみ
+     行い、復旧はユーザーの再クリック。post-queue 中断はローカル要因で稀であり、
+     fire-and-forget の設計上ここに追跡を持ち込まない)。
      **執行位置(round10 指摘)**: fantia の `fetchBinary` は本文を丸ごと `ArrayBuffer` に
      確保してから返すため、取得後にバジェット判定しても一時スパイクは防げない。そこで
      `fetchBinary` に **`maxBytes` 引数を追加し、`Content-Length` ヘッダによる事前ゲート**
