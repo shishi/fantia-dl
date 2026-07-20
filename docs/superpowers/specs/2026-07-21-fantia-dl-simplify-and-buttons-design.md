@@ -174,6 +174,17 @@ fanbox-dl で次の 3 つが実証された:
 `fetchPost`/`fetchBinary` と同様に `r.ok` でなければ `{ok:false, error:"status N"}` を返すよう
 修正する(B の一覧ボタンに限らず投稿ページ経路も同じ関数を通るため、共通の堅牢化)。
 
+### 統一応答契約(adversarial レビュー round13/round14 指摘)
+`runDownloadFor(postId)` の結果は fanbox-dl の `DownloadResponse` と同じ
+**`{ queued: number, errors: string[], notices: string[] }`** に統一する(zip 分と通常 DL 分を
+呼び出し側で合算)。normative な要点:
+- **個別アイテムの失敗は黙って落とさない**: 現行は `resolveUrl` 失敗を `console.warn` で
+  スキップし成功カウントだけ表示するため、一覧ボタン経由では無通知のデータ欠落になる
+  (dedup 撤去後は後から気づく手段も無い)。resolveUrl 失敗・enqueue 検証落ち等の
+  アイテム単位の失敗は、どのアイテムか識別できる文言で `errors` に積み、alert で表示する。
+- `notices` は情報通知(zip フォールバック等)、`errors` は「実際に保存できなかったもの」
+  だけに使う(round13 の分離)。`queued > 0` かつ errors ありの部分成功は両方表示する。
+
 ### 対象外(YAGNI)
 ファンクラブトップ/ホーム/検索/マイページ系への展開。投稿ページのボタン配置変更
 (`h1.post-title` は安定クラスのため現行の title 直後で問題ない)。
