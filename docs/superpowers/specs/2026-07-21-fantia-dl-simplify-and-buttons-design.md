@@ -76,6 +76,12 @@ fanbox-dl で次の 3 つが実証された:
      `conflictAction: "overwrite"` 相当で validatePath を呼ぶ)。uniquify 扱いで entry を
      検証すると `(segmentMaxLen - uniquifyHeadroom, segmentMaxLen]` の長さの正当な entry 名が
      誤って拒否され、zip 全体が不当に中断される。
+     **options のプレビュー/検証も同じ使い分けに従う(adversarial レビュー round6 指摘)**:
+     現行の options は 3 テンプレ共通の 1 検証経路が conflictAction select に依存している。
+     select 削除後は、`pathTemplate` と `zipPathTemplate` のプレビュー検証は uniquify 前提
+     (headroom 減算あり)、`zipEntryTemplate` のプレビュー検証は headroom 無効、と
+     テンプレートごとにパラメータ化する(実行時検証と常に同じモードで判定されるようにし、
+     「options では通るのに実行時に落ちる」/その逆の食い違いを作らない)。
 5. 失敗した DL の復旧はユーザーの再クリック(そのとき photo の署名 URL も新規取得される)。
 
 ### migration(fantia 固有)
