@@ -15,7 +15,10 @@ fanbox-dl で次の 3 つが実証された:
 これらを fantia-dl(本家)へ还元する。shishi 確認済みの決定:
 - dedup は **全撤去**(resume/needs_page も含む。photo の署名 URL は再クリックで取り直せるため)
 - 一覧ボタンは **`/fanclubs/{id}/posts` のみ**(ファンクラブトップ・ホーム・検索は対象外)
-- slash 中和は **プレースホルダ展開値の `/` を `illegalCharReplacement` に置換**(literal は separator のまま)
+- slash 中和は **サーバ由来のプレースホルダ展開値の `/` を置換**。テンプレート literal と
+  `$date`/`$today` の出力は不変(adversarial レビュー指摘 1 の反映。詳細は変更 C)
+- `conflictAction` は **uniquify 固定にし、overwrite 設定を廃止**(adversarial レビュー指摘 3 の
+  反映。dedup 撤去後は誤った再クリックが確認なしの上書き事故に直結するため。fanbox-dl と同じ判断)
 
 ## 変更 A: 履歴機構の全撤去(fire-and-forget 化)
 
@@ -24,7 +27,8 @@ fanbox-dl で次の 3 つが実証された:
 - service-worker の: dedup フィルタ(`done`/`requested` スキップ)、`updateJob` 系呼び出し、
   `onChanged` の通常 DL 分岐(done/needs_page/error 記録)、起動時 reconcile の通常 DL 分、
   `sweepOldDoneJobs`(1 年 sweep)、`clearHistory` メッセージハンドラ
-- options の「DL 履歴の管理」セクション(options.html + options.ts の clearHistory UI)
+- options の「DL 履歴の管理」セクション(options.html + options.ts の clearHistory UI)と
+  `conflictAction` 選択 UI(uniquify 固定化に伴い。上記フロー 3 参照)
 - content-script の 🔄(再ダウンロード)ボタンと `force` フラグ(`EnqueueMessage.force` ごと廃止)
 - `EnqueueItem` の `idemKey` / `refetch` フィールドと、parse(`src/fantia/parse.ts`)での付与
 
@@ -33,8 +37,12 @@ fanbox-dl で次の 3 つが実証された:
    `{kind:"enqueue", post, items}` を SW へ送る(従来どおり。`force` のみ廃止)。
 2. SW: 各 item について renderTemplate → validatePath → バッチ内 `seenPaths` 重複チェック
    (すべて既存の検証を維持)→ 通過分を `chrome.downloads.download({url, filename, saveAs:false,
-   conflictAction: s.conflictAction})` で**投げっぱなし**(結果を永続追跡しない)。
-3. 同名衝突は `conflictAction` 設定(uniquify/overwrite)に委ねる(設定は現状維持)。
+   conflictAction: "uniquify"})` で**投げっぱなし**(結果を永続追跡しない)。
+3. 同名衝突は **uniquify 固定**(`foo (1).ext`)に委ねる。adversarial レビュー指摘 3:
+   dedup 撤去で「同じ投稿の二重実行を止める最後のガード」が消えるため、overwrite 選択が
+   残っていると一覧ボタンの誤クリック・再注入競合・一覧→詳細の二重発火が**確認なしの
+   アーカイブ上書き**に直結する。overwrite 設定は options UI と `Settings` 型から削除し、
+   既存ユーザーの保存値は loadSettings で uniquify に強制する(zip 経路の conflictAction も同様)。
 4. **zip 経路は全部無傷**: Port(start→chunk*→end)、offscreen document、blob URL の
    `zipDownloads` Map + storage.session 同期、zip の onChanged 分岐(revoke)、zip の
    起動時 reconcile。これらは dedup と無関係の資源管理(blob リーク防止)のため維持する。
@@ -98,12 +106,39 @@ page-script の `fetchPost` が任意 postId で 200 を返すことを実機で
 `/` を `opts.replacement` に置換する。テンプレート literal の `/` は separator として不変。
 `renderTemplate` は `render` に opts を渡す形にシグネチャを内部変更する(公開 API 不変)。
 
-- 例: テンプレ `$creator/$postTitle/$filename`、postTitle=`お知らせ 1/2` →
+### 中和の対象(normative)
+中和するのは **`$date` / `$today` を除く全プレースホルダ**の展開値。
+- adversarial レビュー指摘 1: options のヘルプは「`$date{}` / `$today{}` 内の非トークン文字は
+  そのまま出力される」と明記しており、`$date{YYYY/MM}` で年/月ディレクトリを掘る使い方が
+  公式にできる。この `/` の出所はサーバ値ではなく**ユーザー自身のフォーマット文字列**
+  (= 意図された区切り)なので中和してはならない。全出力を中和すると既存ユーザーの保存パスが
+  黙って変わり、uniquify では重複ツリー生成につながる。
+- それ以外のプレースホルダ(creator / creatorId / postTitle / postId / contentTitle /
+  contentId / contentType / plan / filename / ext / seq / total)の値はサーバ由来
+  (または数値・拡張子)であり、そこに現れる `/` は常に「データがたまたま含んでいた文字」
+  なので中和する。数値系に `/` は実際には現れないが、除外リスト方式
+  (date/today のみ除外)にすることで将来のプレースホルダ追加時に安全側へ倒す。
+- この意味論は fanbox-dl の render-adapter(ctx のサーバ由来文字列のみ事前中和、date は
+  core 内計算のため対象外)と一致する。
+
+### replacement 自体のガード(adversarial レビュー指摘 2)
+`illegalCharReplacement` に `/` や `\` を設定できると中和が無効化・逆用される。
+fanbox-dl と同じ二段ガードを移植する:
+1. **保存時バリデーション**: options 保存時に replacement が `/` `\` などの不正文字
+   (sanitizer の ILLEGAL 相当)や制御文字を含む場合は保存を拒否しエラー表示する
+   (fanbox-dl の `validate-templates.ts` 相当を移植)。
+2. **読み込み時クランプ**: `loadSettings` で保存済み値を検証し、不正なら `_` に強制する
+   (バリデーション導入前に保存された synced 設定への防御)。SW と content-script(zip 経路)の
+   両方が loadSettings 経由のため単一点で効く。
+
+### 例・適用範囲
+- テンプレ `$creator/$postTitle/$filename`、postTitle=`お知らせ 1/2` →
   従来 `creator/お知らせ 1/2/file.jpg`(意図しないディレクトリ)→ 修正後 `creator/お知らせ 1_2/file.jpg`
+- `$date{YYYY/MM}` → 従来どおり `2026/07`(年/月ディレクトリ)のまま(挙動不変)
 - 適用範囲: `pathTemplate` / `zipPathTemplate` / `zipEntryTemplate`(全て同一 renderTemplate 経路)
-- `\` は後段 `sanitizeSegment` の ILLEGAL 置換で除去済みのため追加対応不要
-- 既存ユーザー影響: literal 不変のためパス構造は変わらない。値に `/` を含む投稿のみ挙動が変わる
-  (= 本修正の目的)
+- `\` は後段 `sanitizeSegment` の ILLEGAL 置換で除去済みのため値レベルの追加対応不要
+- 既存ユーザー影響: literal と date/today が不変のためパス構造は変わらない。サーバ値に `/` を
+  含む投稿のみ挙動が変わる(= 本修正の目的)
 
 ## テスト方針
 
@@ -112,9 +147,13 @@ fantia-dl の既存方針(純粋関数のみ単体テスト、SW/DOM 配線は�
   (postIdFromPathname / postIdFromHref の外部ホスト拒否 / isFanclubPostListPage /
   selectPostAnchorIndicesToInject の後勝ち・dedup・再注入契約)
 - `tests/template-engine.test.ts` に slash 中和ケース追加(値の `/` 置換、literal `/` 不変、
-  グループ `[...]` 内の値、zipEntryTemplate 相当のケース)
+  **`$date{YYYY/MM}` / `$today{YYYY/MM}` の `/` 不変**、グループ `[...]` 内の値、
+  zipEntryTemplate 相当のケース)
+- replacement ガードのテスト: 保存時バリデーション(`/` `\` 拒否)と loadSettings クランプ
+  (不正保存値 → `_` 強制、overwrite 保存値 → uniquify 強制)
 - `tests/parse.test.ts`: idemKey / refetch 削除に合わせて期待値更新
-- 手動ゲート: 一覧ボタン表示・クリック DL・投稿ページ従来動作・zip・options(履歴 UI 消滅)
+- 手動ゲート: 一覧ボタン表示・クリック DL・投稿ページ従来動作・zip・options
+  (履歴 UI / conflictAction UI の消滅)
 
 ## スコープ外(YAGNI)
 - fanbox-dl の finalUrl リダイレクト再検証や URL allowlist の fantia への導入
