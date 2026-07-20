@@ -52,9 +52,14 @@ fanbox-dl で次の 3 つが実証された:
    - `loadSettings` の merge を **既知キーの allowlist 方式**に変え、保存済みの unknown キー
      (旧 `conflictAction` 含む)を結果に含めない。options の保存(`{...cur, ...}`)も
      同様に既知キーのみ書き戻す
-4. **zip 経路は全部無傷**: Port(start→chunk*→end)、offscreen document、blob URL の
+4. **zip 経路の資源管理は無傷**: Port(start→chunk*→end)、offscreen document、blob URL の
    `zipDownloads` Map + storage.session 同期、zip の onChanged 分岐(revoke)、zip の
    起動時 reconcile。これらは dedup と無関係の資源管理(blob リーク防止)のため維持する。
+   **ただし 1 点だけプロトコルを変更する(adversarial レビュー round3 指摘)**:
+   `ZipStartMessage` の `conflictAction` フィールドを削除する。zip は Port 経由で
+   conflictAction を独自に運んでおり(content-script → SW → downloads.download)、ここを
+   残すと settings から消しても overwrite が表現可能なままになる。SW の zip DL も
+   `DOWNLOAD_CONFLICT_ACTION` 定数を直接使う(フィールド削除により型レベルで封鎖)。
 5. 失敗した DL の復旧はユーザーの再クリック(そのとき photo の署名 URL も新規取得される)。
 
 ### migration(fantia 固有)
