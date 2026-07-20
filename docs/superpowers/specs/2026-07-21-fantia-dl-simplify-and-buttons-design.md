@@ -132,6 +132,9 @@ fanbox-dl で次の 3 つが実証された:
 (adversarial レビュー round7 指摘: fetchPost だけでは photo 以外の DL 経路を保証しない):
 1. `meta[name="csrf-token"]` が存在し、page-script の `fetchPost` が任意 postId で 200 を返す
 2. `resolveUrl`(file/video 系の `download_uri` 解決)が一覧ページから正しい最終 URL を返す
+3. `fetchBinary`(photo ギャラリーの signed URL 取得。`zipGalleries` デフォルト true のため
+   ギャラリー投稿の既定経路)が一覧ページから 200 でバイナリを返す(round8 指摘:
+   page-script の全 3 能力を gate で網羅する)
 確認できない場合、一覧ボタン機能は見送り(A/C のみ実装)とし spec を改訂する。
 
 ### resolveUrl の fail-closed 化(adversarial レビュー round7 指摘)
