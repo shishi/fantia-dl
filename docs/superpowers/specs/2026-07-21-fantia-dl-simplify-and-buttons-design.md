@@ -128,9 +128,17 @@ fanbox-dl で次の 3 つが実証された:
 カードは postId とボタンが 1:1 対応するため。投稿ページボタンはクリック時に URL から読む)。
 
 ### 実装前 hard gate(オリジン/csrf 確認)
-一覧ページ `/fanclubs/{id}/posts` に `meta[name="csrf-token"]` が存在し、そのページに注入した
-page-script の `fetchPost` が任意 postId で 200 を返すことを実機で確認してから一覧ボタンを
-有効化する。確認できない場合、一覧ボタン機能は見送り(A/C のみ実装)とし spec を改訂する。
+一覧ページ `/fanclubs/{id}/posts` で次の**両方**を実機確認してから一覧ボタンを有効化する
+(adversarial レビュー round7 指摘: fetchPost だけでは photo 以外の DL 経路を保証しない):
+1. `meta[name="csrf-token"]` が存在し、page-script の `fetchPost` が任意 postId で 200 を返す
+2. `resolveUrl`(file/video 系の `download_uri` 解決)が一覧ページから正しい最終 URL を返す
+確認できない場合、一覧ボタン機能は見送り(A/C のみ実装)とし spec を改訂する。
+
+### resolveUrl の fail-closed 化(adversarial レビュー round7 指摘)
+現行 page-script の `resolveUrl` は `r.ok` を確認せず `{ok:true, url:r.url}` を返す fail-open
+(403/404/422 でもエラーページ URL などが「解決成功」として enqueue され得る)。
+`fetchPost`/`fetchBinary` と同様に `r.ok` でなければ `{ok:false, error:"status N"}` を返すよう
+修正する(B の一覧ボタンに限らず投稿ページ経路も同じ関数を通るため、共通の堅牢化)。
 
 ### 対象外(YAGNI)
 ファンクラブトップ/ホーム/検索/マイページ系への展開。投稿ページのボタン配置変更
