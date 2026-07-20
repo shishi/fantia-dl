@@ -67,8 +67,7 @@ fanbox-dl で次の 3 つが実証された:
      揃っていない。古い synced テンプレートが空セグメント・`.`/`..`・長すぎるパスを
      生んでも素通りする。fanbox-dl が zip 実装で entry ごとの検証を足したのと同様に、
      content-script の zip 生成時に **zip ファイル名(zipPath)と各 entry 名の両方を
-     `validatePath` で検証**し、不合格ならその zip をエラーとして中断する
-     (エラーメッセージは既存の zip エラー表示経路に乗せる)。
+     `validatePath` で検証**する。
      **検証モードの使い分け(adversarial レビュー round5 指摘)**: zipPath は実際に
      `chrome.downloads.download` を通るため uniquify 前提(`uniquifyHeadroom` 減算あり)で
      検証する。一方 **entry 名はアーカイブ内部の名前**で uniquify サフィックスが付かないため、
@@ -79,11 +78,16 @@ fanbox-dl で次の 3 つが実証された:
    - **zip ソースバジェット(adversarial レビュー round9/round10 指摘)**: 現行の zip
      組み立ては全ファイルをメモリに保持して同期 `zipSync` する上限なしの経路であり、
      一覧ボタン(B)はこれを高密度な面から連打しやすくする。fanbox-dl の zip 実装が持つ
-     **ソース総バイト数とファイル件数のバジェット**を移植し、超過したら zip を中止して
-     **そのギャラリーは個別ファイル DL(既存の非 zip enqueue 経路)へフォールバック**する
-     (fanbox-dl 原設計 §7b と同じ「zip 不成立時は個別 DL」の意味論。単なるエラー中断に
-     しない ―― ユーザーの目的は保存であって zip 形式ではないため)。上限値は fanbox-dl の
+     **ソース総バイト数とファイル件数のバジェット**を移植する。上限値は fanbox-dl の
      実装値を初期値として流用する。
+   - **zip 失敗の統一フォールバック(adversarial レビュー round11 指摘)**: 現行 fantia の
+     ギャラリーは「zip 排他分岐」で、zip が失敗するとそのギャラリーが丸ごと未保存になる。
+     fanbox-dl(orchestrator)と同じく、**あらゆる zip 失敗(バジェット超過・zipPath/entry の
+     validatePath 不合格・offscreen 障害・Port 切断等)で、そのギャラリーを個別ファイル DL
+     (既存の非 zip enqueue 経路)へフォールバック**する。個別 DL をスキップしてよいのは
+     zip が実際に成功したときだけ(fanbox-dl 原設計 §7b と同じ「zip 不成立時は個別 DL」の
+     統一意味論。ユーザーの目的は保存であって zip 形式ではないため)。フォールバック発生は
+     既存のエラー/通知表示経路でユーザーに伝える。
      **執行位置(round10 指摘)**: fantia の `fetchBinary` は本文を丸ごと `ArrayBuffer` に
      確保してから返すため、取得後にバジェット判定しても一時スパイクは防げない。そこで
      `fetchBinary` に **`maxBytes` 引数を追加し、`Content-Length` ヘッダによる事前ゲート**
