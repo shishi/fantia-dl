@@ -76,6 +76,14 @@ fanbox-dl で次の 3 つが実証された:
      `conflictAction: "overwrite"` 相当で validatePath を呼ぶ)。uniquify 扱いで entry を
      検証すると `(segmentMaxLen - uniquifyHeadroom, segmentMaxLen]` の長さの正当な entry 名が
      誤って拒否され、zip 全体が不当に中断される。
+   - **zip ソースバジェット(adversarial レビュー round9 指摘)**: 現行の zip 組み立ては
+     全ファイルをメモリに保持して同期 `zipSync` する上限なしの経路であり、一覧ボタン(B)は
+     これを高密度な面から連打しやすくする。fanbox-dl の zip 実装が持つ**ソース総バイト数と
+     ファイル件数のバジェット**を移植し、fetch 累積が上限を超えたら zip を中止して
+     **そのギャラリーは個別ファイル DL(既存の非 zip enqueue 経路)へフォールバック**する
+     (fanbox-dl 原設計 §7b と同じ「zip 不成立時は個別 DL」の意味論。単なるエラー中断に
+     しない ―― ユーザーの目的は保存であって zip 形式ではないため)。上限値は fanbox-dl の
+     実装値を初期値として流用する。
      **options のプレビュー/検証も同じ使い分けに従う(adversarial レビュー round6 指摘)**:
      現行の options は 3 テンプレ共通の 1 検証経路が conflictAction select に依存している。
      select 削除後は、`pathTemplate` と `zipPathTemplate` のプレビュー検証は uniquify 前提
