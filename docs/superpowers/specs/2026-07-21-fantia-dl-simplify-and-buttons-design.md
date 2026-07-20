@@ -41,8 +41,17 @@ fanbox-dl で次の 3 つが実証された:
 3. 同名衝突は **uniquify 固定**(`foo (1).ext`)に委ねる。adversarial レビュー指摘 3:
    dedup 撤去で「同じ投稿の二重実行を止める最後のガード」が消えるため、overwrite 選択が
    残っていると一覧ボタンの誤クリック・再注入競合・一覧→詳細の二重発火が**確認なしの
-   アーカイブ上書き**に直結する。overwrite 設定は options UI と `Settings` 型から削除し、
-   既存ユーザーの保存値は loadSettings で uniquify に強制する(zip 経路の conflictAction も同様)。
+   アーカイブ上書き**に直結する。
+   **構造的に閉じる(adversarial レビュー round2 指摘)**: 値の強制だけでは、現行の
+   settings merge が unknown キーを温存する blind spread(`{...defaults, ...saved}`)のため、
+   リファクタ後に `s.conflictAction` の読み残しが 1 箇所でも生き残ると保存済み
+   `"overwrite"` が復活する。fanbox-dl と同じく:
+   - `conflictAction` を `Settings` 型から削除し、`DOWNLOAD_CONFLICT_ACTION = "uniquify"`
+     定数に置き換える(通常 DL と zip の両経路がこの定数を参照。型消滅により読み残しは
+     コンパイルエラーになる)
+   - `loadSettings` の merge を **既知キーの allowlist 方式**に変え、保存済みの unknown キー
+     (旧 `conflictAction` 含む)を結果に含めない。options の保存(`{...cur, ...}`)も
+     同様に既知キーのみ書き戻す
 4. **zip 経路は全部無傷**: Port(start→chunk*→end)、offscreen document、blob URL の
    `zipDownloads` Map + storage.session 同期、zip の onChanged 分岐(revoke)、zip の
    起動時 reconcile。これらは dedup と無関係の資源管理(blob リーク防止)のため維持する。
@@ -150,7 +159,9 @@ fantia-dl の既存方針(純粋関数のみ単体テスト、SW/DOM 配線は�
   **`$date{YYYY/MM}` / `$today{YYYY/MM}` の `/` 不変**、グループ `[...]` 内の値、
   zipEntryTemplate 相当のケース)
 - replacement ガードのテスト: 保存時バリデーション(`/` `\` 拒否)と loadSettings クランプ
-  (不正保存値 → `_` 強制、overwrite 保存値 → uniquify 強制)
+  (不正保存値 → `_` 強制)
+- settings テスト: allowlist merge が unknown キー(旧 `conflictAction` 含む)を落とすこと、
+  `DOWNLOAD_CONFLICT_ACTION` が uniquify であること
 - `tests/parse.test.ts`: idemKey / refetch 削除に合わせて期待値更新
 - 手動ゲート: 一覧ボタン表示・クリック DL・投稿ページ従来動作・zip・options
   (履歴 UI / conflictAction UI の消滅)
