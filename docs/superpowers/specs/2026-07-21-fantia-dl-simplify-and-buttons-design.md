@@ -76,14 +76,23 @@ fanbox-dl で次の 3 つが実証された:
      `conflictAction: "overwrite"` 相当で validatePath を呼ぶ)。uniquify 扱いで entry を
      検証すると `(segmentMaxLen - uniquifyHeadroom, segmentMaxLen]` の長さの正当な entry 名が
      誤って拒否され、zip 全体が不当に中断される。
-   - **zip ソースバジェット(adversarial レビュー round9 指摘)**: 現行の zip 組み立ては
-     全ファイルをメモリに保持して同期 `zipSync` する上限なしの経路であり、一覧ボタン(B)は
-     これを高密度な面から連打しやすくする。fanbox-dl の zip 実装が持つ**ソース総バイト数と
-     ファイル件数のバジェット**を移植し、fetch 累積が上限を超えたら zip を中止して
+   - **zip ソースバジェット(adversarial レビュー round9/round10 指摘)**: 現行の zip
+     組み立ては全ファイルをメモリに保持して同期 `zipSync` する上限なしの経路であり、
+     一覧ボタン(B)はこれを高密度な面から連打しやすくする。fanbox-dl の zip 実装が持つ
+     **ソース総バイト数とファイル件数のバジェット**を移植し、超過したら zip を中止して
      **そのギャラリーは個別ファイル DL(既存の非 zip enqueue 経路)へフォールバック**する
      (fanbox-dl 原設計 §7b と同じ「zip 不成立時は個別 DL」の意味論。単なるエラー中断に
      しない ―― ユーザーの目的は保存であって zip 形式ではないため)。上限値は fanbox-dl の
      実装値を初期値として流用する。
+     **執行位置(round10 指摘)**: fantia の `fetchBinary` は本文を丸ごと `ArrayBuffer` に
+     確保してから返すため、取得後にバジェット判定しても一時スパイクは防げない。そこで
+     `fetchBinary` に **`maxBytes` 引数を追加し、`Content-Length` ヘッダによる事前ゲート**
+     (超過確定なら本文を読まず `body.cancel()` して `{ok:false, tooLarge:true}`)を行う。
+     content-script 側は残バジェットを `maxBytes` として渡す。`Content-Length` が無い
+     応答は取得後判定の best-effort に留まる(single-file の一時確保は残るが、蓄積は
+     バジェットで常に有界)。この spec はストリーミング化までは要求しない(パイプライン
+     全面改修は本変更のスコープ外。バジェットの効果は「蓄積の有界化+ヘッダあり応答の
+     事前遮断」であり、ヘッダ無し応答の単発スパイクまでは解消しない、と正直に限定する)。
      **options のプレビュー/検証も同じ使い分けに従う(adversarial レビュー round6 指摘)**:
      現行の options は 3 テンプレ共通の 1 検証経路が conflictAction select に依存している。
      select 削除後は、`pathTemplate` と `zipPathTemplate` のプレビュー検証は uniquify 前提
