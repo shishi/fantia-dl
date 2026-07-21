@@ -30,9 +30,9 @@
 ## File Structure(最終形)
 
 - 削除: `src/background/job-store.ts`、`src/content/page-script.ts`
-- 新設: `src/content/dom-helpers.ts`(純粋関数: postId 抽出・一覧判定・注入 dedup・isTrusted ゲート)、`src/content/fantia-api.ts`(isolated world fetch: fetchPost / resolveUrl / fetchBinary)、`src/content/zip-support.ts`(バジェット定数・直列化キュー・非同期 zip)、`src/core/url-allowlist.ts`(DL 前 URL 検証)、`src/options/validate-templates.ts`(options 検証の純粋関数)
+- 新設: `src/content/dom-helpers.ts`(純粋関数: postId 抽出・一覧判定・注入 dedup・isTrusted ゲート・in-flight ガード)、`src/content/fantia-api.ts`(isolated world fetch: fetchPost / resolveUrl / fetchBinary)、`src/content/zip-support.ts`(バジェット定数・直列化キュー・非同期 zip・ソース収集)、`src/background/enqueue-plan.ts`(SW enqueue の純粋部分: render→validate→allowlist→dedup)、`src/core/url-allowlist.ts`(DL 前 URL 検証)、`src/options/validate-templates.ts`(options 検証の純粋関数)
 - 変更: `src/core/{template-engine,settings,sanitizer,types}.ts`、`src/content/{content-script,messages}.ts`、`src/background/service-worker.ts`、`src/fantia/parse.ts`、`src/options/options.ts`、`public/manifest.json`、`public/options/options.html`、`scripts/build.mjs`
-- テスト: 新設 `tests/{dom-helpers,fantia-api,url-allowlist,zip-support,options-validate-templates}.test.ts`、更新 `tests/{template-engine,settings,sanitizer,parse}.test.ts`
+- テスト: 新設 `tests/{dom-helpers,fantia-api,url-allowlist,zip-support,enqueue-plan,options-validate-templates}.test.ts`、更新 `tests/{template-engine,settings,sanitizer,parse}.test.ts`
 
 ---
 
@@ -669,8 +669,9 @@ validate templates per execution mode (uniquify vs zip-entry) on save."'
 
 **Files:**
 - Delete: `src/background/job-store.ts`
+- Create: `src/background/enqueue-plan.ts`
 - Modify: `src/background/service-worker.ts`、`src/content/messages.ts`、`src/content/content-script.ts`、`src/core/types.ts`、`src/fantia/parse.ts`、`src/options/options.ts`、`public/options/options.html`
-- Test: `tests/parse.test.ts`
+- Test: `tests/parse.test.ts`、`tests/enqueue-plan.test.ts`(新設)
 
 **Interfaces:**
 - Consumes: `DOWNLOAD_CONFLICT_ACTION`(Task 2)、`renderTemplate` / `validatePath`(既存)
@@ -680,6 +681,7 @@ validate templates per execution mode (uniquify vs zip-entry) on save."'
   - `EnqueueResponse { queued: number; errors: string[] }`(SW の応答)
   - `DownloadResult { queued: number; errors: string[]; notices: string[] }`(content script 側の統一応答契約。notices は Task 7 まで常に空)
   - `FileItem`(types.ts)から `idemKey` / `refetch` を削除
+  - `PlannedDownload { url: string; relPath: string }`、`planEnqueue(msg: EnqueueMessage, s: Settings): { downloads: PlannedDownload[]; errors: string[] }`(enqueue-plan.ts。SW enqueue の純粋部分。Task 6 が allowlist チェックをこの関数に追加する)
 
 - [ ] **Step 1: parse のテストを新契約に更新**
 
@@ -809,44 +811,99 @@ export interface ZipPortResult {
 }
 ```
 
-- [ ] **Step 4: service-worker を fire-and-forget に書き換え、job-store を削除**
+- [ ] **Step 4: enqueue-plan の失敗するテストを書く(allowlist 適用点 a の受け皿)**
 
-`src/background/job-store.ts` を削除: `wsl.exe -e bash -lc 'cd /home/shishi/dev/src/github.com/shishi/fantia-dl && git rm src/background/job-store.ts'`
-
-`src/background/service-worker.ts` に次の変更を加える(**zip 関連のコード — `zipDownloads` Map / `persistZipDownloads` / `loadZipDownloads` / `ensureOffscreenDocument` / `sendChunkToOffscreen` / `finishZipDownload` / `revokeOffscreenUrl` / `discardOffscreenJob` / `chrome.runtime.onConnect` リスナー / zip の起動時 reconcile IIFE — はコメント含め一切変更しない**。dedup と無関係の資源管理のため維持する。spec 変更 A-4):
-
-1. import を次にする(job-store import の削除、`EnqueueResponse` の追加):
+SW の enqueue 判定(render → validatePath → バッチ内 dedup。Task 6 で allowlist が加わる)は
+`chrome.downloads.download` に到達する item を決める要の契約なので、chrome API から切り離した
+純粋関数 `planEnqueue` として単体テストする。`tests/enqueue-plan.test.ts` を新設:
 
 ```ts
-import { loadSettings, DOWNLOAD_CONFLICT_ACTION } from "../core/settings";
-import { renderTemplate, TemplateError } from "../core/template-engine";
-import { validatePath } from "../core/path-validator";
-import type { RenderContext } from "../core/types";
-import type { EnqueueMessage, EnqueueItem, EnqueueResponse, PostMeta, ZipPortMessage, ZipPortResult } from "../content/messages";
-import { ZIP_PORT_NAME } from "../content/messages";
-import { OFFSCREEN_TARGET } from "../offscreen/protocol";
-import type {
-  OffscreenAbortMessage,
-  OffscreenChunkMessage,
-  OffscreenDoneMessage,
-  OffscreenRevokeMessage,
-  OffscreenResult,
-} from "../offscreen/protocol";
+import { planEnqueue } from "../src/background/enqueue-plan";
+import { DEFAULT_SETTINGS } from "../src/core/settings";
+import type { EnqueueMessage } from "../src/content/messages";
+
+const msg = (items: Partial<EnqueueMessage["items"][number]>[]): EnqueueMessage => ({
+  kind: "enqueue",
+  post: { creator: "c", creatorId: "1", postTitle: "t", postId: "9", postedAtIso: "2026-01-15T03:30:00.000Z" },
+  items: items.map((it) => ({
+    contentId: "42", contentTitle: "g", contentType: "photo", plan: "p",
+    filename: "img", ext: "png", seq: 1, total: 1, url: "https://c.fantia.jp/a.png",
+    ...it,
+  })),
+  pageUrl: "https://fantia.jp/posts/9",
+});
+
+describe("planEnqueue(SW enqueue の純粋部分: render→validate→dedup)", () => {
+  it("有効な item は downloads に載る(url と relPath)", () => {
+    const r = planEnqueue(msg([{}]), DEFAULT_SETTINGS);
+    expect(r.errors).toEqual([]);
+    expect(r.downloads).toHaveLength(1);
+    expect(r.downloads[0].url).toBe("https://c.fantia.jp/a.png");
+    expect(r.downloads[0].relPath).toContain("fantia/c/");
+  });
+  it("無効化された contentType はスキップ(エラーにもしない)", () => {
+    const s = { ...DEFAULT_SETTINGS, contentTypes: { ...DEFAULT_SETTINGS.contentTypes, photo: false } };
+    const r = planEnqueue(msg([{}]), s);
+    expect(r.downloads).toHaveLength(0);
+    expect(r.errors).toEqual([]);
+  });
+  it("url 未解決の item は errors に積む", () => {
+    const r = planEnqueue(msg([{ url: "" }]), DEFAULT_SETTINGS);
+    expect(r.downloads).toHaveLength(0);
+    expect(r.errors[0]).toContain("url 未解決");
+  });
+  it("バッチ内パス重複は 2 件目を errors に積む", () => {
+    const r = planEnqueue(msg([{}, {}]), DEFAULT_SETTINGS);
+    expect(r.downloads).toHaveLength(1);
+    expect(r.errors[0]).toContain("バッチ内パス重複");
+  });
+  it("テンプレート不正は全体中断(downloads 空)", () => {
+    const s = { ...DEFAULT_SETTINGS, pathTemplate: "$doesNotExist" };
+    const r = planEnqueue(msg([{}]), s);
+    expect(r.downloads).toHaveLength(0);
+    expect(r.errors[0]).toContain("テンプレートエラー");
+  });
+});
 ```
 
-2. `handleEnqueue` と `startDownload` を次の 1 関数に置き換える(`ctxOf` は不変):
+Run: `wsl.exe -e bash -lc 'export PATH=$HOME/.npm-global/bin:$PATH && cd /home/shishi/dev/src/github.com/shishi/fantia-dl && bun run test'`
+Expected: FAIL — `../src/background/enqueue-plan` が存在しない。
+
+- [ ] **Step 5: enqueue-plan.ts を実装してテストを通す**
+
+`src/background/enqueue-plan.ts` を新設(`ctxOf` は service-worker.ts からここへ移動):
 
 ```ts
-// fire-and-forget(spec 変更 A): 検証を通過した item を downloads.download に
-// 投げっぱなしにし、結果を永続追跡しない。同名衝突は uniquify 固定に委ね、
-// 失敗した DL の復旧はユーザーの再クリック(photo の署名 URL もそのとき取り直される)。
+// src/background/enqueue-plan.ts
+// SW enqueue の純粋部分(render → validatePath → バッチ内 dedup)。chrome API に
+// 触らないため単体テスト対象。downloads.download の実行は service-worker 側。
+// Task 6 で DL 前 URL allowlist(spec 変更 B round15 の適用点 a)がここに加わる。
+import { renderTemplate, TemplateError } from "../core/template-engine";
+import { validatePath } from "../core/path-validator";
+import { DOWNLOAD_CONFLICT_ACTION } from "../core/settings";
+import type { RenderContext, Settings } from "../core/types";
+import type { EnqueueItem, EnqueueMessage, PostMeta } from "../content/messages";
+
+export interface PlannedDownload {
+  url: string;
+  relPath: string;
+}
+
+function ctxOf(post: PostMeta, it: EnqueueItem): RenderContext {
+  return {
+    creator: post.creator, creatorId: post.creatorId, postTitle: post.postTitle, postId: post.postId,
+    postedAt: new Date(post.postedAtIso), now: new Date(),
+    contentTitle: it.contentTitle, contentId: it.contentId, contentType: it.contentType, plan: it.plan,
+    filename: it.filename, ext: it.ext, seq: it.seq, total: it.total,
+  };
+}
+
 // アイテム単位の失敗は黙って落とさず errors に積む(統一応答契約)。
-async function handleEnqueue(msg: EnqueueMessage): Promise<EnqueueResponse> {
-  const s = await loadSettings();
+export function planEnqueue(msg: EnqueueMessage, s: Settings): { downloads: PlannedDownload[]; errors: string[] } {
   const enabled = (t: string) => (s.contentTypes as Record<string, boolean>)[t] !== false;
   const seenPaths = new Set<string>();
   const errors: string[] = [];
-  let queued = 0;
+  const downloads: PlannedDownload[] = [];
 
   for (const it of msg.items) {
     if (!enabled(it.contentType)) continue;
@@ -862,11 +919,55 @@ async function handleEnqueue(msg: EnqueueMessage): Promise<EnqueueResponse> {
     if (!v.ok) { errors.push(`${relPath}: ${v.error}`); continue; }
     if (seenPaths.has(relPath)) { errors.push(`バッチ内パス重複: ${relPath}`); continue; }
     seenPaths.add(relPath);
+    downloads.push({ url: it.url, relPath });
+  }
+  return { downloads, errors };
+}
+```
+
+Run: `wsl.exe -e bash -lc 'export PATH=$HOME/.npm-global/bin:$PATH && cd /home/shishi/dev/src/github.com/shishi/fantia-dl && bun run test'`
+Expected: tests/enqueue-plan.test.ts 全 PASS。
+
+- [ ] **Step 6: service-worker を fire-and-forget に書き換え、job-store を削除**
+
+`src/background/job-store.ts` を削除: `wsl.exe -e bash -lc 'cd /home/shishi/dev/src/github.com/shishi/fantia-dl && git rm src/background/job-store.ts'`
+
+`src/background/service-worker.ts` に次の変更を加える(**zip 関連のコード — `zipDownloads` Map / `persistZipDownloads` / `loadZipDownloads` / `ensureOffscreenDocument` / `sendChunkToOffscreen` / `finishZipDownload` / `revokeOffscreenUrl` / `discardOffscreenJob` / `chrome.runtime.onConnect` リスナー / zip の起動時 reconcile IIFE — はコメント含め一切変更しない**。dedup と無関係の資源管理のため維持する。spec 変更 A-4):
+
+1. import を次にする(job-store / template-engine / path-validator import の削除、`planEnqueue` と `EnqueueResponse` の追加):
+
+```ts
+import { loadSettings, DOWNLOAD_CONFLICT_ACTION } from "../core/settings";
+import { planEnqueue } from "./enqueue-plan";
+import type { EnqueueMessage, EnqueueResponse, ZipPortMessage, ZipPortResult } from "../content/messages";
+import { ZIP_PORT_NAME } from "../content/messages";
+import { OFFSCREEN_TARGET } from "../offscreen/protocol";
+import type {
+  OffscreenAbortMessage,
+  OffscreenChunkMessage,
+  OffscreenDoneMessage,
+  OffscreenRevokeMessage,
+  OffscreenResult,
+} from "../offscreen/protocol";
+```
+
+2. `handleEnqueue` と `startDownload` を次の 1 関数に置き換え、SW 内の `ctxOf` を削除する(Step 5 で enqueue-plan.ts へ移動済み):
+
+```ts
+// fire-and-forget(spec 変更 A): planEnqueue(純粋・単体テスト対象)が決めた item を
+// downloads.download に投げっぱなしにし、結果を永続追跡しない。同名衝突は uniquify
+// 固定に委ね、失敗した DL の復旧はユーザーの再クリック(photo の署名 URL もそのとき
+// 取り直される)。アイテム単位の失敗は黙って落とさず errors に積む(統一応答契約)。
+async function handleEnqueue(msg: EnqueueMessage): Promise<EnqueueResponse> {
+  const s = await loadSettings();
+  const { downloads, errors } = planEnqueue(msg, s);
+  let queued = 0;
+  for (const d of downloads) {
     try {
-      await chrome.downloads.download({ url: it.url, filename: relPath, saveAs: false, conflictAction: DOWNLOAD_CONFLICT_ACTION });
+      await chrome.downloads.download({ url: d.url, filename: d.relPath, saveAs: false, conflictAction: DOWNLOAD_CONFLICT_ACTION });
       queued++;
     } catch (e) {
-      errors.push(`${relPath}: ${String(e)}`);
+      errors.push(`${d.relPath}: ${String(e)}`);
     }
   }
   return { queued, errors };
@@ -911,7 +1012,7 @@ chrome.downloads.onChanged.addListener(async (delta) => {
 void chrome.storage.local.remove("jobs");
 ```
 
-- [ ] **Step 5: content-script から force / 🔄 を撤去し統一応答契約にする**
+- [ ] **Step 7: content-script から force / 🔄 を撤去し統一応答契約にする**
 
 `src/content/content-script.ts` に次の変更を加える(page-script ブリッジ `injectPageScript`/`call` は Task 4 で廃止するため、このタスクでは現状維持):
 
@@ -986,13 +1087,13 @@ async function runDownload(): Promise<DownloadResult | null> {
   });
 ```
 
-- [ ] **Step 6: options から DL 履歴 UI を削除**
+- [ ] **Step 8: options から DL 履歴 UI を削除**
 
 `public/options/options.html` から `<hr style="margin: 24px 0; ...">` から `</p>`(`clearedNotice` を含む段落)までの「DL 履歴の管理」セクション全体(現行 115〜124 行目)を削除する。
 
 `src/options/options.ts` から `$("clearHistory").addEventListener(...)` ブロック全体を削除する。
 
-- [ ] **Step 7: 検証**
+- [ ] **Step 9: 検証**
 
 Run: `wsl.exe -e bash -lc 'cd /home/shishi/dev/src/github.com/shishi/fantia-dl && grep -rn "idemKey\|refetch\|clearHistory\|force\|job-store\|JobRecord" src/ public/ | grep -v "\.map"'`
 Expected: ヒット 0 件(あれば読み残し。直す)。
@@ -1000,7 +1101,7 @@ Expected: ヒット 0 件(あれば読み残し。直す)。
 Run: `wsl.exe -e bash -lc 'export PATH=$HOME/.npm-global/bin:$PATH && cd /home/shishi/dev/src/github.com/shishi/fantia-dl && bun run test && bun run typecheck && bun run build'`
 Expected: 全テスト PASS、tsc エラーなし、build 成功。
 
-- [ ] **Step 8: コミット**
+- [ ] **Step 10: コミット**
 
 ```bash
 wsl.exe -e bash -lc 'cd /home/shishi/dev/src/github.com/shishi/fantia-dl && git add -A src public tests && git commit -m "feat!: remove download-history dedup, go fire-and-forget
@@ -1453,15 +1554,16 @@ post and fanclub-list pages before enabling list buttons."'
 
 **Files:**
 - Create: `src/core/url-allowlist.ts`
-- Modify: `src/content/fantia-api.ts`(resolveUrl の入出力検証)、`src/background/service-worker.ts`(enqueue 前検証)、`src/content/content-script.ts`(zip 用 fetchBinary 前検証)、`public/manifest.json`(host_permissions)
-- Test: `tests/url-allowlist.test.ts`(新設)、`tests/fantia-api.test.ts`(追記)
+- Modify: `src/content/fantia-api.ts`(resolveUrl の入出力検証)、`src/background/enqueue-plan.ts`(downloads.download 前検証 = 適用点 a)、`src/content/content-script.ts`(zip 用 fetchBinary 前検証 = 適用点 b の暫定配線。Task 7 で collectZipSources に集約)、`public/manifest.json`(host_permissions)
+- Test: `tests/url-allowlist.test.ts`(新設)、`tests/fantia-api.test.ts`(追記)、`tests/enqueue-plan.test.ts`(追記)
 
 **Interfaces:**
-- Consumes: Task 5 の実測ホスト集合(hard-gate-results.md)、Task 4 の `resolveUrl`
+- Consumes: Task 5 の実測ホスト集合(hard-gate-results.md)、Task 4 の `resolveUrl`、Task 3 の `planEnqueue`
 - Produces(url-allowlist.ts):
   - `ALLOWED_CDN_HOSTS: readonly string[]`
   - `validateDownloadUrl(url: string): { ok: true } | { ok: false; error: string }`
   - `validateResolveInput(downloadUri: string): { ok: true; url: string } | { ok: false; error: string }`
+  - `planEnqueue`(enqueue-plan.ts)は allowlist 検証込みになる(シグネチャ不変)
 
 - [ ] **Step 1: 失敗するテストを書く**
 
@@ -1527,10 +1629,20 @@ describe("validateResolveInput(resolveUrl の入力ガード: fetch 自体が cr
   });
 ```
 
+`tests/enqueue-plan.test.ts` の describe に追加(適用点 a の契約: allowlist 外 URL のアイテムは downloads.download に到達しない):
+
+```ts
+  it("allowlist 外 URL の item は downloads に載らず errors に積まれる(DL 前 allowlist 適用点 a)", () => {
+    const r = planEnqueue(msg([{ url: "https://evil.example.com/a.png" }]), DEFAULT_SETTINGS);
+    expect(r.downloads).toHaveLength(0);
+    expect(r.errors[0]).toContain("許可外ホスト");
+  });
+```
+
 - [ ] **Step 2: テストが落ちることを確認**
 
 Run: `wsl.exe -e bash -lc 'export PATH=$HOME/.npm-global/bin:$PATH && cd /home/shishi/dev/src/github.com/shishi/fantia-dl && bun run test'`
-Expected: FAIL — `../src/core/url-allowlist` が存在しない、resolveUrl の新 2 ケースが失敗。
+Expected: FAIL — `../src/core/url-allowlist` が存在しない、resolveUrl の新 2 ケースと planEnqueue の allowlist ケースが失敗。
 
 - [ ] **Step 3: url-allowlist.ts を実装**
 
@@ -1612,7 +1724,7 @@ export async function resolveUrl(
 }
 ```
 
-`src/background/service-worker.ts` の `handleEnqueue` に適用(import に `import { validateDownloadUrl } from "../core/url-allowlist";` を追加し、`if (!it.url) {...}` の直後に挿入):
+`src/background/enqueue-plan.ts` の `planEnqueue` に適用(import に `import { validateDownloadUrl } from "../core/url-allowlist";` を追加し、`if (!it.url) {...}` の直後に挿入。これで downloads.download に到達する item は全て allowlist 済みになる — 適用点 a):
 
 ```ts
     const uv = validateDownloadUrl(it.url);
@@ -1667,6 +1779,8 @@ errors, never silently dropped."'
   - `ZIP_FALLBACK_NOTICE = "zip を中止し個別ダウンロードに切り替えました"`
   - `createSerialQueue(): <T>(job: () => Promise<T>) => Promise<T>`
   - `zipAsync(entries: Record<string, Uint8Array>): Promise<Uint8Array>`
+  - `BinaryFetch = (url: string, opts: { maxBytes: number }) => Promise<{ ok: true; buffer: ArrayBuffer } | { ok: false; error: string; tooLarge?: boolean }>`
+  - `collectZipSources(urls: string[], fetchFn: BinaryFetch, limits?: { budget?: number; maxFiles?: number }): Promise<{ ok: true; buffers: Map<string, Uint8Array> } | { ok: false; reason: string }>` — allowlist(適用点 b)+ 件数/バイトバジェットを内蔵
   - content-script 内 `tryZipGallery(block: ContentBlock, post: PostData, s: Settings): Promise<{ ok: true } | { ok: false; reason: string }>`
 
 - [ ] **Step 1: 失敗するテストを書く**
@@ -1675,7 +1789,7 @@ errors, never silently dropped."'
 
 ```ts
 import { unzipSync } from "fflate";
-import { createSerialQueue, zipAsync, ZIP_SOURCE_BUDGET_BYTES, ZIP_MAX_FILES, ZIP_FALLBACK_NOTICE } from "../src/content/zip-support";
+import { createSerialQueue, zipAsync, collectZipSources, ZIP_SOURCE_BUDGET_BYTES, ZIP_MAX_FILES, ZIP_FALLBACK_NOTICE, type BinaryFetch } from "../src/content/zip-support";
 
 describe("createSerialQueue(ページ内 zip 組み立ての直列化)", () => {
   it("ジョブを投入順に直列実行する(並走しない)", async () => {
@@ -1701,6 +1815,43 @@ describe("zipAsync(fflate 非同期 zip)", () => {
     const un = unzipSync(data);
     expect(new TextDecoder().decode(un["a.txt"])).toBe("hello");
     expect(new TextDecoder().decode(un["dir/b.txt"])).toBe("world");
+  });
+});
+
+describe("collectZipSources(zip ソース収集: allowlist 適用点 b + バジェット)", () => {
+  it("許可外 URL の file は fetch されず失敗する(→ 呼び出し側で個別 DL フォールバック)", async () => {
+    let fetched = 0;
+    const fetchFn: BinaryFetch = async () => { fetched++; return { ok: true, buffer: new ArrayBuffer(1) }; };
+    const r = await collectZipSources(["https://evil.example.com/a.png"], fetchFn);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("許可外ホスト");
+    expect(fetched).toBe(0);
+  });
+  it("許可 URL は残バジェットを maxBytes として渡しながら順に収集する", async () => {
+    const seenMaxBytes: number[] = [];
+    const fetchFn: BinaryFetch = async (_u, opts) => { seenMaxBytes.push(opts.maxBytes); return { ok: true, buffer: new Uint8Array(10).buffer }; };
+    const r = await collectZipSources(["https://c.fantia.jp/a.png", "https://c.fantia.jp/b.png"], fetchFn, { budget: 25 });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.buffers.size).toBe(2);
+      expect(r.buffers.get("https://c.fantia.jp/a.png")!.byteLength).toBe(10);
+    }
+    expect(seenMaxBytes).toEqual([25, 15]);
+  });
+  it("fetch 側の tooLarge(バジェット超過)は失敗として返る", async () => {
+    const fetchFn: BinaryFetch = async () => ({ ok: false, error: "too big", tooLarge: true });
+    const r = await collectZipSources(["https://c.fantia.jp/a.png"], fetchFn, { budget: 5 });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("バジェット超過");
+  });
+  it("件数上限超過は 1 バイトも fetch せず失敗する", async () => {
+    let fetched = 0;
+    const fetchFn: BinaryFetch = async () => { fetched++; return { ok: true, buffer: new ArrayBuffer(1) }; };
+    const urls = ["https://c.fantia.jp/0.png", "https://c.fantia.jp/1.png", "https://c.fantia.jp/2.png"];
+    const r = await collectZipSources(urls, fetchFn, { maxFiles: 2 });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("件数上限");
+    expect(fetched).toBe(0);
   });
 });
 
@@ -1759,16 +1910,49 @@ export function zipAsync(entries: Record<string, Uint8Array>): Promise<Uint8Arra
     zip(entries, {}, (err, data) => (err ? reject(err) : resolve(data)));
   });
 }
+
+export type BinaryFetch = (url: string, opts: { maxBytes: number }) =>
+  Promise<{ ok: true; buffer: ArrayBuffer } | { ok: false; error: string; tooLarge?: boolean }>;
+
+// zip ソース収集: 各 URL を DL 前 allowlist(spec 変更 B round15 の適用点 b)で検証してから
+// fetch し、残バジェットを maxBytes として渡して累積を有界化する(round9/10)。
+// どれか 1 つでも失敗したら全体を失敗として返し、呼び出し側(tryZipGallery)が
+// ギャラリーごと個別 DL にフォールバックする(黙った欠落の禁止)。
+// fetchFn は注入可能(単体テストのため。実運用は fantia-api の fetchBinary)。
+export async function collectZipSources(
+  urls: string[],
+  fetchFn: BinaryFetch,
+  limits: { budget?: number; maxFiles?: number } = {},
+): Promise<{ ok: true; buffers: Map<string, Uint8Array> } | { ok: false; reason: string }> {
+  const budget = limits.budget ?? ZIP_SOURCE_BUDGET_BYTES;
+  const maxFiles = limits.maxFiles ?? ZIP_MAX_FILES;
+  if (urls.length > maxFiles) return { ok: false, reason: `zip 件数上限(${maxFiles})超過` };
+  const buffers = new Map<string, Uint8Array>();
+  let used = 0;
+  for (const url of urls) {
+    const uv = validateDownloadUrl(url);
+    if (!uv.ok) return { ok: false, reason: uv.error };
+    const res = await fetchFn(url, { maxBytes: budget - used });
+    if (!res.ok) {
+      return { ok: false, reason: res.tooLarge ? `zip ソースバジェット超過: ${res.error}` : `fetchBinary 失敗: ${res.error}` };
+    }
+    used += res.buffer.byteLength;
+    buffers.set(url, new Uint8Array(res.buffer));
+  }
+  return { ok: true, buffers };
+}
 ```
+
+import には `import { validateDownloadUrl } from "../core/url-allowlist";` を先頭ブロックに追加する。
 
 - [ ] **Step 4: テストが通ることを確認**
 
 Run: `wsl.exe -e bash -lc 'export PATH=$HOME/.npm-global/bin:$PATH && cd /home/shishi/dev/src/github.com/shishi/fantia-dl && bun run test'`
-Expected: tests/zip-support.test.ts 全 PASS(zipAsync のテストが環境要因で落ちる場合は fflate の worker 初期化を疑い、原因を particular に調査する — 黙って skip しない)。
+Expected: tests/zip-support.test.ts 全 PASS(zipAsync のテストが環境要因で落ちる場合は fflate の worker 初期化を疑い、原因を特定して直す — 黙って skip しない)。
 
 - [ ] **Step 5: content-script の zip 経路を書き換える(検証・バジェット・直列化・フォールバック)**
 
-`src/content/content-script.ts` で `makeAndDownloadZip` / `makeAndDownloadZipInner` を削除し、次に置き換える(import 変更: `import { validatePath } from "../core/path-validator";` と `import { createSerialQueue, zipAsync, ZIP_SOURCE_BUDGET_BYTES, ZIP_MAX_FILES, ZIP_FALLBACK_NOTICE } from "./zip-support";` を追加、loadSettings の import 行を `import { loadSettings, DOWNLOAD_CONFLICT_ACTION } from "../core/settings";` に変更、types の import に `FileItem` を追加、`import { zipSync } from "fflate";` を削除):
+`src/content/content-script.ts` で `makeAndDownloadZip` / `makeAndDownloadZipInner` を削除し、次に置き換える(import 変更: `import { validatePath } from "../core/path-validator";` と `import { createSerialQueue, zipAsync, collectZipSources, ZIP_FALLBACK_NOTICE } from "./zip-support";` を追加、loadSettings の import 行を `import { loadSettings, DOWNLOAD_CONFLICT_ACTION } from "../core/settings";` に変更、types の import に `FileItem` を追加、`import { zipSync } from "fflate";` と Task 6 で入れた `import { validateDownloadUrl } from "../core/url-allowlist";` を削除 — allowlist・件数・バジェットは collectZipSources が内蔵する):
 
 ```ts
 // --- zip 組み立て(spec 変更 A-4 / B) ---------------------------------------
@@ -1792,20 +1976,18 @@ function tryZipGallery(block: ContentBlock, post: PostData, s: Settings): Promis
 async function tryZipGalleryInner(block: ContentBlock, post: PostData, s: Settings): Promise<GalleryZipResult> {
   const files = block.files.filter((f): f is FileItem & { directUrl: string } => !!f.directUrl);
   if (files.length === 0) return { ok: false, reason: "directUrl のある photo がありません" };
-  if (files.length > ZIP_MAX_FILES) return { ok: false, reason: `zip 件数上限(${ZIP_MAX_FILES})超過` };
+
+  // ソース収集: 各 URL の allowlist 検証(適用点 b)・件数上限・残バジェットの
+  // maxBytes 伝搬は collectZipSources(単体テスト対象)が行う。
+  const collected = await collectZipSources(files.map((f) => f.directUrl), (url, opts) => fetchBinary(url, opts));
+  if (!collected.ok) return { ok: false, reason: collected.reason };
 
   const entries: Record<string, Uint8Array> = {};
   const usedNames = new Set<string>();
   const now = new Date();
-  let used = 0; // 累積ソースバイト(タブ内のバジェット計上)
   for (const f of files) {
-    const uv = validateDownloadUrl(f.directUrl);
-    if (!uv.ok) return { ok: false, reason: uv.error };
-    const res = await fetchBinary(f.directUrl, { maxBytes: ZIP_SOURCE_BUDGET_BYTES - used });
-    if (!res.ok) {
-      return { ok: false, reason: res.tooLarge ? `zip ソースバジェット超過: ${res.error}` : `fetchBinary 失敗: ${res.error}` };
-    }
-    used += res.buffer.byteLength;
+    const buf = collected.buffers.get(f.directUrl);
+    if (!buf) return { ok: false, reason: `zip ソース欠落: ${f.directUrl}` };
 
     const ctx: RenderContext = {
       creator: post.creator, creatorId: post.creatorId,
@@ -1838,7 +2020,7 @@ async function tryZipGalleryInner(block: ContentBlock, post: PostData, s: Settin
     const pv = validatePath(entryPath, { fullPathMaxLen: s.fullPathMaxLen, uniquifyHeadroom: s.uniquifyHeadroom, conflictAction: "overwrite", segmentMaxLen: s.segmentMaxLen });
     if (!pv.ok) return { ok: false, reason: `zip entry 名不正: ${entryPath}: ${pv.error}` };
     usedNames.add(entryPath);
-    entries[entryPath] = new Uint8Array(res.buffer);
+    entries[entryPath] = buf;
   }
 
   const firstFile = files[0];
@@ -1875,7 +2057,7 @@ async function tryZipGalleryInner(block: ContentBlock, post: PostData, s: Settin
 }
 ```
 
-(Task 6 で `makeAndDownloadZipInner` に挿入した `validateDownloadUrl` の検証行は、この `tryZipGalleryInner` 内の同位置に引き継がれている。)
+(Task 6 で `makeAndDownloadZipInner` に挿入した `validateDownloadUrl` の暫定検証は、collectZipSources 内の検証(単体テスト済み)に集約された。)
 
 `runDownload` の zip 分岐を次に置き換える(Task 3 で入れた notices をここで使用開始):
 
@@ -1925,13 +2107,15 @@ failed zip never silently loses a whole gallery (spec A-4, B r9-13/21)."'
 - Test: `tests/dom-helpers.test.ts`(新設)
 
 **Interfaces:**
-- Consumes: `DownloadResult`(Task 3)、`fetchPost`/`resolveUrl`/`fetchBinary`(Task 4/6)、`tryZipGallery` ほか zip 経路(Task 7)
+- Consumes: `DownloadResult`(Task 3)、`fetchPost`/`resolveUrl`/`fetchBinary`(Task 4/6)、`tryZipGallery` / `collectZipSources` ほか zip 経路(Task 7)
 - Produces(dom-helpers.ts):
   - `postIdFromPathname(pathname: string): string | null`
-  - `postIdFromHref(href: string): string | null`
+  - `postIdFromHref(href: string): string | null`(絶対 URL は `fantia.jp` 完全一致のみ。spec の文言どおりサブドメインは対象外)
   - `isFanclubPostListPage(pathname: string): boolean`
   - `selectPostAnchorIndicesToInject(postIds: (string | null)[], alreadyInjectedPostIds: Set<string>): number[]`
   - `shouldHandleDlClick(ev: { isTrusted: boolean }): boolean`
+  - `beginDownloadAttempt(inFlight: Set<string>, postId: string): boolean`(in-flight なら false、そうでなければ Set に追加して true)
+  - `endDownloadAttempt(inFlight: Set<string>, postId: string): void`
   - content-script 内 `runDownloadFor(postId: string): Promise<DownloadResult | null>`
 
 - [ ] **Step 1: 失敗するテストを書く**
@@ -1939,7 +2123,7 @@ failed zip never silently loses a whole gallery (spec A-4, B r9-13/21)."'
 `tests/dom-helpers.test.ts` を新設(fanbox-dl の tests/dom-helpers.test.ts を fantia の URL 構造に翻案):
 
 ```ts
-import { postIdFromPathname, postIdFromHref, isFanclubPostListPage, selectPostAnchorIndicesToInject, shouldHandleDlClick } from "../src/content/dom-helpers";
+import { postIdFromPathname, postIdFromHref, isFanclubPostListPage, selectPostAnchorIndicesToInject, shouldHandleDlClick, beginDownloadAttempt, endDownloadAttempt } from "../src/content/dom-helpers";
 
 describe("postIdFromPathname", () => {
   it("/posts/{id} から抽出(末尾スラッシュ許容)", () => {
@@ -1962,6 +2146,10 @@ describe("postIdFromHref", () => {
   it("外部ホストの /posts/{id} は null(一覧ページの外部リンク誤認防止)", () => {
     expect(postIdFromHref("https://example.com/posts/123")).toBeNull();
     expect(postIdFromHref("https://twitter.com/posts/456")).toBeNull();
+  });
+  it("fantia.jp のサブドメインも null(spec: 絶対 URL は fantia.jp ホストのみ許可。投稿ページは fantia.jp 直下にしか無い)", () => {
+    expect(postIdFromHref("https://sub.fantia.jp/posts/123")).toBeNull();
+    expect(postIdFromHref("https://c.fantia.jp/posts/123")).toBeNull();
   });
   it("投稿リンクでない href は null", () => {
     expect(postIdFromHref("/fanclubs/123")).toBeNull();
@@ -2005,6 +2193,32 @@ describe("shouldHandleDlClick(信頼クリックゲート: 合成クリックで
     expect(shouldHandleDlClick({ isTrusted: false })).toBe(false);
   });
 });
+
+describe("beginDownloadAttempt / endDownloadAttempt(in-flight ガードのコア判定。spec round25)", () => {
+  it("未登録の postId は true を返し Set に追加する", () => {
+    const s = new Set<string>();
+    expect(beginDownloadAttempt(s, "1")).toBe(true);
+    expect(s.has("1")).toBe(true);
+  });
+  it("in-flight 中の多重起動は false(dedup 撤去後の同一タブ内二重 DL 防止)", () => {
+    const s = new Set<string>();
+    beginDownloadAttempt(s, "1");
+    expect(beginDownloadAttempt(s, "1")).toBe(false);
+    expect(s.size).toBe(1);
+  });
+  it("end 後は同じ postId を再び開始できる(復旧はユーザーの再クリック)", () => {
+    const s = new Set<string>();
+    beginDownloadAttempt(s, "1");
+    endDownloadAttempt(s, "1");
+    expect(s.has("1")).toBe(false);
+    expect(beginDownloadAttempt(s, "1")).toBe(true);
+  });
+  it("別 postId の in-flight には影響しない", () => {
+    const s = new Set<string>();
+    beginDownloadAttempt(s, "1");
+    expect(beginDownloadAttempt(s, "2")).toBe(true);
+  });
+});
 ```
 
 - [ ] **Step 2: テストが落ちることを確認**
@@ -2026,11 +2240,13 @@ export function postIdFromPathname(pathname: string): string | null {
 }
 
 // href(相対 or 絶対)から postId を抽出。投稿リンクでなければ null。
-// 絶対 URL は fantia.jp ホストのみ許可(一覧に混ざる外部リンクの誤認防止)。
+// 絶対 URL は fantia.jp ホスト**完全一致**のみ許可(spec 変更 B の文言どおり。
+// 投稿ページは fantia.jp 直下にしか無く、サブドメイン(CDN 等)への /posts/ リンクを
+// 投稿と誤認しないため。外部リンク誤認防止も兼ねる)。
 export function postIdFromHref(href: string): string | null {
   try {
     const u = new URL(href, "https://fantia.jp");
-    if (u.host !== "fantia.jp" && !u.host.endsWith(".fantia.jp")) return null;
+    if (u.host !== "fantia.jp") return null;
     return postIdFromPathname(u.pathname);
   } catch {
     return null;
@@ -2067,6 +2283,22 @@ export function selectPostAnchorIndicesToInject(postIds: (string | null)[], alre
 export function shouldHandleDlClick(ev: { isTrusted: boolean }): boolean {
   return ev.isTrusted;
 }
+
+// in-flight ガードのコア判定(spec round25)。click 中の disabled 状態はボタン DOM
+// ノード上にしか無く、サイトのカード再レンダリングで消えると再注入された新品ボタンが
+// 重複クリックを許す(dedup 撤去後は吸収されない)。Set はタブ内・揮発で、同一タブ内の
+// 同時多重起動だけを防ぐ(永続化しない = dedup の復活ではない)。
+// DL 開始を試みる: 既に in-flight なら false、そうでなければ Set に追加して true。
+export function beginDownloadAttempt(inFlight: Set<string>, postId: string): boolean {
+  if (inFlight.has(postId)) return false;
+  inFlight.add(postId);
+  return true;
+}
+
+// DL の完了/失敗時に必ず呼ぶ(finally で)。以後、同じ postId を再び開始できる。
+export function endDownloadAttempt(inFlight: Set<string>, postId: string): void {
+  inFlight.delete(postId);
+}
 ```
 
 - [ ] **Step 4: テストが通ることを確認**
@@ -2086,11 +2318,10 @@ import { ZIP_PORT_NAME } from "./messages";
 import { loadSettings, DOWNLOAD_CONFLICT_ACTION } from "../core/settings";
 import { renderTemplate, TemplateError } from "../core/template-engine";
 import { validatePath } from "../core/path-validator";
-import { validateDownloadUrl } from "../core/url-allowlist";
 import { bytesToBase64 } from "../core/base64";
 import { fetchPost, resolveUrl, fetchBinary } from "./fantia-api";
-import { postIdFromPathname, postIdFromHref, isFanclubPostListPage, selectPostAnchorIndicesToInject, shouldHandleDlClick } from "./dom-helpers";
-import { createSerialQueue, zipAsync, ZIP_SOURCE_BUDGET_BYTES, ZIP_MAX_FILES, ZIP_FALLBACK_NOTICE } from "./zip-support";
+import { postIdFromPathname, postIdFromHref, isFanclubPostListPage, selectPostAnchorIndicesToInject, shouldHandleDlClick, beginDownloadAttempt, endDownloadAttempt } from "./dom-helpers";
+import { createSerialQueue, zipAsync, collectZipSources, ZIP_FALLBACK_NOTICE } from "./zip-support";
 
 // --- zip 転送(Port: start -> chunk* -> end) --------------------------------
 const ZIP_CHUNK_BYTES = 4 * 1024 * 1024; // 1 メッセージ上限を避けるためのチャンクサイズ
@@ -2123,20 +2354,18 @@ function tryZipGallery(block: ContentBlock, post: PostData, s: Settings): Promis
 async function tryZipGalleryInner(block: ContentBlock, post: PostData, s: Settings): Promise<GalleryZipResult> {
   const files = block.files.filter((f): f is FileItem & { directUrl: string } => !!f.directUrl);
   if (files.length === 0) return { ok: false, reason: "directUrl のある photo がありません" };
-  if (files.length > ZIP_MAX_FILES) return { ok: false, reason: `zip 件数上限(${ZIP_MAX_FILES})超過` };
+
+  // ソース収集: 各 URL の allowlist 検証(適用点 b)・件数上限・残バジェットの
+  // maxBytes 伝搬は collectZipSources(単体テスト対象)が行う。
+  const collected = await collectZipSources(files.map((f) => f.directUrl), (url, opts) => fetchBinary(url, opts));
+  if (!collected.ok) return { ok: false, reason: collected.reason };
 
   const entries: Record<string, Uint8Array> = {};
   const usedNames = new Set<string>();
   const now = new Date();
-  let used = 0;
   for (const f of files) {
-    const uv = validateDownloadUrl(f.directUrl);
-    if (!uv.ok) return { ok: false, reason: uv.error };
-    const res = await fetchBinary(f.directUrl, { maxBytes: ZIP_SOURCE_BUDGET_BYTES - used });
-    if (!res.ok) {
-      return { ok: false, reason: res.tooLarge ? `zip ソースバジェット超過: ${res.error}` : `fetchBinary 失敗: ${res.error}` };
-    }
-    used += res.buffer.byteLength;
+    const buf = collected.buffers.get(f.directUrl);
+    if (!buf) return { ok: false, reason: `zip ソース欠落: ${f.directUrl}` };
 
     const ctx: RenderContext = {
       creator: post.creator, creatorId: post.creatorId,
@@ -2165,7 +2394,7 @@ async function tryZipGalleryInner(block: ContentBlock, post: PostData, s: Settin
     const pv = validatePath(entryPath, { fullPathMaxLen: s.fullPathMaxLen, uniquifyHeadroom: s.uniquifyHeadroom, conflictAction: "overwrite", segmentMaxLen: s.segmentMaxLen });
     if (!pv.ok) return { ok: false, reason: `zip entry 名不正: ${entryPath}: ${pv.error}` };
     usedNames.add(entryPath);
-    entries[entryPath] = new Uint8Array(res.buffer);
+    entries[entryPath] = buf;
   }
 
   const firstFile = files[0];
@@ -2200,20 +2429,17 @@ async function tryZipGalleryInner(block: ContentBlock, post: PostData, s: Settin
 }
 
 // --- DL 本体(投稿ページ・一覧カード共通のフロー) ----------------------------
-// in-flight ガード(spec round25): click 中の disabled 状態はボタン DOM ノード上に
-// しか無く、サイトのカード再レンダリングで消えると watch の再注入が同じ postId の
-// 新品有効ボタンを作り、in-flight 中の重複クリックが可能になる(dedup 撤去後は
-// 吸収されない)。タブ内・揮発の Set で同一タブ内の同時多重起動だけを防ぐ
-// (永続化しない = dedup の復活ではない)。
+// in-flight ガード(spec round25)のコア判定は dom-helpers の
+// beginDownloadAttempt / endDownloadAttempt(純粋関数・単体テスト済み)。
+// ここはタブ内・揮発の Set を握って配線するだけ(永続化しない = dedup の復活ではない)。
 const inFlightPostIds = new Set<string>();
 
 async function runDownloadFor(postId: string): Promise<DownloadResult | null> {
-  if (inFlightPostIds.has(postId)) return null;
-  inFlightPostIds.add(postId);
+  if (!beginDownloadAttempt(inFlightPostIds, postId)) return null; // 多重起動は無視
   try {
     return await runDownloadInner(postId);
   } finally {
-    inFlightPostIds.delete(postId);
+    endDownloadAttempt(inFlightPostIds, postId);
   }
 }
 
