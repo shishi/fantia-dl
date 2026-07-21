@@ -180,7 +180,14 @@ fanbox-dl で次の 3 つが実証された:
   ブリッジ・`web_accessible_resources` の page-script エントリを全削除する。
   MV3 の isolated world fetch はページと同じ CORS/cookie 挙動で、csrf meta も DOM から
   読めるため機能は等価(fanbox-dl は当初から isolated fetch で、このクラスの脆弱性が
-  構造的に存在しない)。**hard gate に追加**: isolated world からの 3 能力
+  構造的に存在しない)。
+  **移行で維持する既存契約(round23 指摘: 落とすと退行)**:
+  - `resolveUrl` は現行どおり **`Range: bytes=0-0` で fetch し本文を即 `cancel()`** する
+    (解決のために全ファイルを転送しない。原設計の normative 契約を isolated world 版に
+    引き継ぐ。落とすと「解決で 1 回 + DL で 1 回」の二重転送になる)。
+  - `fetchPost` / `resolveUrl` の **401/403/422 時の CSRF 再読込リトライ(1 回)** を維持する
+    (csrf meta を読み直して再試行。落とすと stale token での間欠失敗が全て手動リトライに
+    退行する)。**hard gate に追加**: isolated world からの 3 能力
   (fetchPost / resolveUrl / fetchBinary)が投稿ページ・一覧ページの両方で実機動作すること
   (万一 CDN fetch が isolated world でのみ失敗する場合は spec を改訂して再設計する)。
 - watch: 1s interval + MutationObserver(一覧ページのときのみ注入)。fantia は Rails の
