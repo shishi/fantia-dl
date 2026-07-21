@@ -190,6 +190,10 @@ CDN URL** であり、現行実装はそれを無検証で `chrome.downloads.dow
   検証する(round16 指摘: 解決の fetch 自体が credentials 付きの実リクエストのため、
   出力だけ検証しても未検証の外部リクエストが先に飛ぶ)、(d) `resolveUrl` の解決結果。
   いずれも不合格ならそのアイテムを `errors` に積んで除外する(fail-closed)。
+- **zip ソース fetch はリダイレクト禁止(round17 指摘)**: `fetchBinary` は
+  `redirect: "error"` で fetch する(fanbox-dl の zip 実装と同じ)。allowlist を通過した
+  CDN URL が非許可ホストへリダイレクトして任意バイト列を zip に混入させる経路を封じる。
+  signed URL は正規にはリダイレクトしないため正常系への影響は無い。
 - **受容する残余(round16 指摘の明示化)**: resolveUrl のリダイレクト**中間ホップ**は
   検証できない(ブラウザの `redirect:"manual"` は Location を露出しないため構造的に不可)。
   入力が fantia.jp 同一オリジンに検証済みである以上、中間ホップは fantia サーバーの
