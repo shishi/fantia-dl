@@ -126,8 +126,15 @@ fanbox-dl で次の 3 つが実証された:
 ## 変更 B: ファンクラブ投稿一覧に DL ボタン
 
 ### manifest
-`content_scripts.matches` を `https://fantia.jp/posts/*` + `https://fantia.jp/fanclubs/*` に拡大
-(全域常駐はしない)。`web_accessible_resources` の page-script matches は既に `https://fantia.jp/*`。
+- `content_scripts.matches` を `https://fantia.jp/posts/*` + `https://fantia.jp/fanclubs/*` に拡大
+  (全域常駐はしない)。
+- `web_accessible_resources` の page-script エントリは **page-script 廃止に伴い削除**
+  (round19 参照)。
+- **`host_permissions` に実測 CDN ホストを追加(adversarial レビュー round20 指摘)**:
+  isolated world の fetch はページと同じ CORS 制約を受けるため、`fetchBinary` が叩く
+  CDN ホスト(hard gate で実測したもの。URL allowlist と同一の集合)を `host_permissions` に
+  束縛して CORS 免除を確保する。allowlist・host_permissions・実測結果の 3 つが常に同じ
+  ホスト集合を指すことを B の有効化条件とする。
 
 ### ページ判定
 `isFanclubPostListPage(pathname)`: `/fanclubs/{id}/posts`(末尾スラッシュ許容)のみ true。
