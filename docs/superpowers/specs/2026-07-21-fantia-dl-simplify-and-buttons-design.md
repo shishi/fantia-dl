@@ -166,6 +166,14 @@ fanbox-dl で次の 3 つが実証された:
 - ボタンは host に `position:relative` を敷いて右上に absolute 配置。スタイルは fanbox-dl の
   視認性知見を適用: 濃色半透明背景 + 白文字 + 影(白背景小ボタンはサムネイルに埋没する)。
 - クリックは `preventDefault()` + `stopPropagation()` でカード遷移を抑止。
+- **in-flight ガード(adversarial レビュー round25 指摘)**: click 中の状態(disabled)は
+  ボタン DOM ノード上にしか無いため、サイトがカードを再レンダリングすると disabled な
+  ノードごと消え、watch の再注入が同じ postId の新品有効ボタンを作って in-flight 中の
+  重複クリックが可能になる(dedup 撤去後は吸収されない)。content script のメモリに
+  **`inFlightPostIds: Set<string>`(タブ内・揮発)** を持ち、`runDownloadFor` 開始時に
+  追加・完了/失敗時に削除する。click ハンドラは Set に居る postId を無視し、再注入時も
+  Set に居る postId のボタンは disabled で生成する。永続化はしない(dedup の復活ではなく、
+  同一タブ内の同時多重起動だけを防ぐ揮発ガード)。
 - **信頼クリックゲート(adversarial レビュー round18 指摘)**: すべての DL ボタン
   (一覧カード・投稿ページ共通)の click ハンドラは `event.isTrusted` が true の場合のみ
   実行する。ページ上のスクリプト(第一者・侵害済みを問わず)が `.click()` を合成して
