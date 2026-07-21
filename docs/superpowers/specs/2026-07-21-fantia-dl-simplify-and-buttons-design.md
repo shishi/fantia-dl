@@ -154,6 +154,18 @@ fanbox-dl で次の 3 つが実証された:
   実行する。ページ上のスクリプト(第一者・侵害済みを問わず)が `.click()` を合成して
   拡張の権限(credentials 付き fetch + downloads)を無断駆動する経路を封じる。dedup 撤去後は
   合成連打が無制限の重複 DL に直結するため、B で面を広げる前提条件とする。
+- **page-script ブリッジの廃止(adversarial レビュー round19 指摘)**: isTrusted だけでは
+  不十分 ―― 現行の `window.postMessage` ブリッジ(`__fdl` プロトコル)は無認証で、ページ JS が
+  本物のクリックに便乗して偽応答を競り勝たせられる(偽 post JSON・偽解決 URL・最悪は
+  `fetchBinary` への**任意バイト列**注入 → そのまま zip 化されて保存される)。チャネルを
+  守るのではなく**チャネルごと削除**する: `fetchPost` / `resolveUrl` / `fetchBinary` を
+  isolated world の content script 直接 fetch に移行し、`page-script.ts`・postMessage
+  ブリッジ・`web_accessible_resources` の page-script エントリを全削除する。
+  MV3 の isolated world fetch はページと同じ CORS/cookie 挙動で、csrf meta も DOM から
+  読めるため機能は等価(fanbox-dl は当初から isolated fetch で、このクラスの脆弱性が
+  構造的に存在しない)。**hard gate に追加**: isolated world からの 3 能力
+  (fetchPost / resolveUrl / fetchBinary)が投稿ページ・一覧ページの両方で実機動作すること
+  (万一 CDN fetch が isolated world でのみ失敗する場合は spec を改訂して再設計する)。
 - watch: 1s interval + MutationObserver(一覧ページのときのみ注入)。fantia は Rails の
   フルロード遷移が基本のため、これで無限スクロール・動的追加も拾える。
 
