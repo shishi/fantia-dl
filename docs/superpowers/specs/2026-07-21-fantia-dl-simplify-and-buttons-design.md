@@ -322,8 +322,13 @@ fantia-dl の既存方針(純粋関数のみ単体テスト、SW/DOM 配線は�
   (履歴 UI / conflictAction UI の消滅)
 
 ## スコープ外(YAGNI)
-- fanbox-dl の finalUrl リダイレクト再検証(DL 完了時の再チェック)の移植
-  (DL 前 allowlist は round15 指摘で今回スコープ入りした。完了時再検証のみ backlog。
-  必要になったら別 spec)
+- fanbox-dl の finalUrl リダイレクト再検証(DL 完了時の再チェック)の移植。
+  **明示的リスク受容(owner 判断)**: round15 で「C. finalUrl 再検証まで含めたフル移植」を
+  選択肢として提示した上で、shishi が「A. DL 前 allowlist のみ」を選択した。
+  `chrome.downloads.download` はリダイレクトを追うため、通常 DL がリダイレクト先の
+  非許可ホストから保存される残余リスクは**残る**(zip は `redirect:"error"` で保護済み、
+  round24 レビューが再指摘)。この残余は認識済みの backlog であり、導入する場合は
+  fanbox-dl の downloadId→postId 揮発 Map + 完了時 fail-closed 検証(orchestrator 実装)を
+  そのまま移植する別 spec とする。
 - $date のタイムゾーン扱い(fanbox-dl の backlog と同件。core の挙動は両者で共通のまま)
 - 2 リポジトリ間の共通ライブラリ化
