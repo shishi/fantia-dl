@@ -149,6 +149,11 @@ fanbox-dl で次の 3 つが実証された:
 - ボタンは host に `position:relative` を敷いて右上に absolute 配置。スタイルは fanbox-dl の
   視認性知見を適用: 濃色半透明背景 + 白文字 + 影(白背景小ボタンはサムネイルに埋没する)。
 - クリックは `preventDefault()` + `stopPropagation()` でカード遷移を抑止。
+- **信頼クリックゲート(adversarial レビュー round18 指摘)**: すべての DL ボタン
+  (一覧カード・投稿ページ共通)の click ハンドラは `event.isTrusted` が true の場合のみ
+  実行する。ページ上のスクリプト(第一者・侵害済みを問わず)が `.click()` を合成して
+  拡張の権限(credentials 付き fetch + downloads)を無断駆動する経路を封じる。dedup 撤去後は
+  合成連打が無制限の重複 DL に直結するため、B で面を広げる前提条件とする。
 - watch: 1s interval + MutationObserver(一覧ページのときのみ注入)。fantia は Rails の
   フルロード遷移が基本のため、これで無限スクロール・動的追加も拾える。
 
