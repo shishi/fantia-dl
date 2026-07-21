@@ -174,6 +174,25 @@ fanbox-dl で次の 3 つが実証された:
 `fetchPost`/`fetchBinary` と同様に `r.ok` でなければ `{ok:false, error:"status N"}` を返すよう
 修正する(B の一覧ボタンに限らず投稿ページ経路も同じ関数を通るため、共通の堅牢化)。
 
+### DL 前 URL allowlist(adversarial レビュー round15 指摘、shishi 承認で今回スコープ入り)
+従来 spec は「fantia は同一オリジン API 由来 URL のみ」を理由に URL 検証を対象外としていたが、
+この前提は事実と異なる: photo の signed URL や `resolveUrl` の解決先は**クロスオリジンの
+CDN URL** であり、現行実装はそれを無検証で `chrome.downloads.download` / zip 用 fetch に
+渡している。B で起動面が広がるため、fanbox-dl の `validateMediaUrl` に相当する
+**軽量 allowlist を導入**する:
+- `src/core/url-allowlist.ts`(新設・純粋関数・単体テスト対象): https であること、
+  ホストが `fantia.jp` / `*.fantia.jp` または**実測した fantia の CDN ホスト**
+  (下記 hard gate で確定。例: `c.fantia.jp` 系や S3/CloudFront 系が想定される)で
+  あることを検証する。
+- 適用点: (a) SW の enqueue で `downloads.download` 呼び出し前、(b) content-script の
+  zip 用 `fetchBinary` 呼び出し前、(c) `resolveUrl` の解決結果。いずれも不合格なら
+  そのアイテムを `errors` に積んで除外する(fail-closed)。
+- **hard gate 追加**: 実投稿(photo / file / video)で directUrl・resolveUrl 解決先の
+  実ホストを採取し、allowlist に反映してから有効化する(推測ホストで実装しない)。
+- fanbox-dl の finalUrl リダイレクト再検証(DL 完了時の再チェック)は今回は**移植しない**
+  (スコープ外に明記。downloads API はリダイレクトを追うため残余リスクはあるが、
+  DL 前検証で信頼境界は現行より明確に改善する。必要になったら別 spec)。
+
 ### 統一応答契約(adversarial レビュー round13/round14 指摘)
 `runDownloadFor(postId)` の結果は fanbox-dl の `DownloadResponse` と同じ
 **`{ queued: number, errors: string[], notices: string[] }`** に統一する(zip 分と通常 DL 分を
@@ -242,14 +261,17 @@ fantia-dl の既存方針(純粋関数のみ単体テスト、SW/DOM 配線は�
   (不正保存値 → `_` 強制)
 - settings テスト: allowlist merge が unknown キー(旧 `conflictAction` 含む)を落とすこと、
   `DOWNLOAD_CONFLICT_ACTION` が uniquify であること
+- `tests/url-allowlist.test.ts` 新設: fantia.jp / サブドメイン / 実測 CDN ホストの許可、
+  外部ホスト・http・data: 等の拒否
 - zip パス検証は純粋部分(validatePath 自体)は既存テストがあるため、zip 経路への配線は
-  手動ゲートで確認(不正テンプレートで zip がエラー中断すること)
+  手動ゲートで確認(不正テンプレートで zip が個別 DL にフォールバックすること)
 - `tests/parse.test.ts`: idemKey / refetch 削除に合わせて期待値更新
 - 手動ゲート: 一覧ボタン表示・クリック DL・投稿ページ従来動作・zip・options
   (履歴 UI / conflictAction UI の消滅)
 
 ## スコープ外(YAGNI)
-- fanbox-dl の finalUrl リダイレクト再検証や URL allowlist の fantia への導入
-  (fantia は同一オリジン API 由来の URL のみで、元々この機構を持たない。必要になったら別 spec)
+- fanbox-dl の finalUrl リダイレクト再検証(DL 完了時の再チェック)の移植
+  (DL 前 allowlist は round15 指摘で今回スコープ入りした。完了時再検証のみ backlog。
+  必要になったら別 spec)
 - $date のタイムゾーン扱い(fanbox-dl の backlog と同件。core の挙動は両者で共通のまま)
 - 2 リポジトリ間の共通ライブラリ化
