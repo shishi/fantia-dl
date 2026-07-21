@@ -185,8 +185,15 @@ CDN URL** であり、現行実装はそれを無検証で `chrome.downloads.dow
   (下記 hard gate で確定。例: `c.fantia.jp` 系や S3/CloudFront 系が想定される)で
   あることを検証する。
 - 適用点: (a) SW の enqueue で `downloads.download` 呼び出し前、(b) content-script の
-  zip 用 `fetchBinary` 呼び出し前、(c) `resolveUrl` の解決結果。いずれも不合格なら
-  そのアイテムを `errors` に積んで除外する(fail-closed)。
+  zip 用 `fetchBinary` 呼び出し前、(c) **`resolveUrl` の入力(`download_uri`)**
+  ―― fetch 実行前に「fantia.jp 同一オリジンの相対パスまたは fantia.jp URL」であることを
+  検証する(round16 指摘: 解決の fetch 自体が credentials 付きの実リクエストのため、
+  出力だけ検証しても未検証の外部リクエストが先に飛ぶ)、(d) `resolveUrl` の解決結果。
+  いずれも不合格ならそのアイテムを `errors` に積んで除外する(fail-closed)。
+- **受容する残余(round16 指摘の明示化)**: resolveUrl のリダイレクト**中間ホップ**は
+  検証できない(ブラウザの `redirect:"manual"` は Location を露出しないため構造的に不可)。
+  入力が fantia.jp 同一オリジンに検証済みである以上、中間ホップは fantia サーバーの
+  リダイレクト先であり、この 1 ホップ分の信頼は fantia 自体への信頼と同等として受容する。
 - **hard gate 追加**: 実投稿(photo / file / video)で directUrl・resolveUrl 解決先の
   実ホストを採取し、allowlist に反映してから有効化する(推測ホストで実装しない)。
 - fanbox-dl の finalUrl リダイレクト再検証(DL 完了時の再チェック)は今回は**移植しない**
