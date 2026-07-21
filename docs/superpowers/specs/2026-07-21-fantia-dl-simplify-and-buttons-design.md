@@ -80,7 +80,14 @@ fanbox-dl で次の 3 つが実証された:
      一覧ボタン(B)はこれを高密度な面から連打しやすくする。fanbox-dl の zip 実装が持つ
      **ソース総バイト数とファイル件数のバジェット**を移植する。上限値は fanbox-dl の
      実装値を初期値として流用する。
-   - **zip 失敗の統一フォールバック(adversarial レビュー round11/round12 指摘)**: 現行
+   - **zip の直列化と非同期圧縮(adversarial レビュー round21 指摘)**: バジェットは
+     1 ギャラリー単位のため、一覧面でカードを連打すると click ごとに独立の zip 収集が
+     並走し `N × バジェット` のメモリ増幅と、同期 `zipSync` によるメインスレッド凍結が
+     起きる。対策として (a) **ページ内の zip 組み立ては同時 1 件に直列化**する
+     (2 件目以降のギャラリー zip はキューに積み、順に処理する。in-flight メモリは常に
+     最大 1 バジェットに有界)、(b) **`zipSync` を fflate の非同期 `zip()`(worker ベース)に
+     置き換え**、圧縮中もページの操作性を保つ。fanbox-dl 式の「zip を background へ移す」
+     全面移植は本変更のスコープ外(実行位置は変えず、並行度と同期性だけを直す)。
      fantia のギャラリーは「zip 排他分岐」で、zip が失敗するとそのギャラリーが丸ごと
      未保存になる。fanbox-dl(orchestrator)と同じく、**enqueue 前のあらゆる zip 失敗
      (バジェット超過・zipPath/entry の validatePath 不合格・offscreen 障害・Port 切断・
