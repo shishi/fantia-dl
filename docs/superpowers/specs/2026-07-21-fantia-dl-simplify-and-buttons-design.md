@@ -329,6 +329,22 @@ fantia-dl の既存方針(純粋関数のみ単体テスト、SW/DOM 配線は�
 - 手動ゲート: 一覧ボタン表示・クリック DL・投稿ページ従来動作・zip・options
   (履歴 UI / conflictAction UI の消滅)
 
+## adversarial レビューの打ち切りと triaged residual(round26)
+
+codex adversarial レビューを 26 巡実施し、round1〜25 の指摘は全て spec に反映した。
+round21/22/26 は「zip 組み立てを content script に置くアーキテクチャ」への同型の批判に
+収束しており(根本解 = zip の background 移行はスコープ外と 2 度判断済み)、膠着と
+判定して打ち切る。round26 の 2 点は residual として記録する:
+1. **navigation による per-document 状態の揮発**: zip キューと inFlightPostIds は
+   document 単位のため、リロード/遷移でキュー済み zip が消え、in-flight ガードも消える。
+   受容理由: 消えるのはユーザー自身の遷移操作時のみで、復旧は再クリック(fire-and-forget の
+   設計原則と一致)。in-flight ガード消失による重複窓は「遷移して戻って再クリック」という
+   能動操作を要し、uniquify により事故は重複ファイルに留まる。
+2. **zip メモリの多重コピー(ソース+アーカイブ+base64+offscreen 蓄積)**: バジェットは
+   ソースバイトのみ計上し、全体は `~3×` 程度になり得る。これは**現行本番と同じ特性**で
+   本変更による退行ではない(バジェット+直列化+非同期化は現状よりも厳密に改善)。
+   完全な有界化は zip の background/streaming 化を要し、別 spec の backlog とする。
+
 ## スコープ外(YAGNI)
 - fanbox-dl の finalUrl リダイレクト再検証(DL 完了時の再チェック)の移植。
   **明示的リスク受容(owner 判断)**: round15 で「C. finalUrl 再検証まで含めたフル移植」を
