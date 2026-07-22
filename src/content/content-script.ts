@@ -1,60 +1,26 @@
 import { parsePost } from "../fantia/parse";
-import type { EnqueueItem, EnqueueMessage, PostMeta, ZipPortResult, ZipStartMessage, ZipChunkMessage, ZipEndMessage } from "./messages";
+import type { ContentBlock, FileItem, PostData, RenderContext, Settings } from "../core/types";
+import type { DownloadResult, EnqueueItem, EnqueueMessage, EnqueueResponse, PostMeta, ZipPortResult, ZipStartMessage, ZipChunkMessage, ZipEndMessage } from "./messages";
 import { ZIP_PORT_NAME } from "./messages";
-import { zipSync } from "fflate";
-import { loadSettings } from "../core/settings";
+import { loadSettings, DOWNLOAD_CONFLICT_ACTION } from "../core/settings";
 import { renderTemplate, TemplateError } from "../core/template-engine";
+import { validatePath } from "../core/path-validator";
 import { bytesToBase64 } from "../core/base64";
-import type { ContentBlock, PostData, RenderContext, Settings } from "../core/types";
+import { fetchPost, resolveUrl, fetchBinary } from "./fantia-api";
+import { postIdFromPathname, postIdFromHref, isFanclubPostListPage, selectPostAnchorIndicesToInject, shouldHandleDlClick, beginDownloadAttempt, endDownloadAttempt } from "./dom-helpers";
+import { createSerialQueue, zipAsync, collectZipSources, ZIP_FALLBACK_NOTICE } from "./zip-support";
 
-const csrf = () => document.querySelector<HTMLMetaElement>('meta[name="csrf-token"]')?.content ?? "";
-const postIdFromUrl = () => location.pathname.match(/posts\/(\d+)/)?.[1] ?? null;
-
-function injectPageScript(): Promise<void> {
-  return new Promise((res) => {
-    const onReady = (ev: MessageEvent) => {
-      if (ev.source !== window) return;
-      if (ev.data?.__fdl === "ready") { window.removeEventListener("message", onReady); res(); }
-    };
-    window.addEventListener("message", onReady);
-    const s = document.createElement("script");
-    s.src = chrome.runtime.getURL("content/page-script.js");
-    (document.head || document.documentElement).appendChild(s);
-  });
-}
-
-let reqSeq = 0;
-function call(kind: string, extra: Record<string, unknown>): Promise<any> {
-  const reqId = ++reqSeq;
-  return new Promise((res) => {
-    const on = (ev: MessageEvent) => {
-      if (ev.source !== window) return;
-      if (ev.data?.__fdl === "res" && ev.data.reqId === reqId) {
-        window.removeEventListener("message", on);
-        res(ev.data);
-      }
-    };
-    window.addEventListener("message", on);
-    window.postMessage({ __fdl: "req", reqId, kind, csrf: csrf(), ...extra }, "*");
-  });
-}
-
+// --- zip 転送(Port: start -> chunk* -> end) --------------------------------
 const ZIP_CHUNK_BYTES = 4 * 1024 * 1024; // 1 メッセージ上限を避けるためのチャンクサイズ
 
-// zip バイト列を Port の start -> chunk* -> end で background に送る
-// (1 メッセージで送ると runtime messaging のサイズ上限に引っかかるため)。
-function sendZipOverPort(
-  filename: string,
-  conflictAction: "uniquify" | "overwrite",
-  bytes: Uint8Array,
-): Promise<ZipPortResult> {
+function sendZipOverPort(filename: string, bytes: Uint8Array): Promise<ZipPortResult> {
   return new Promise((resolve) => {
     let settled = false;
     const finish = (r: ZipPortResult) => { if (!settled) { settled = true; resolve(r); } };
     const port = chrome.runtime.connect({ name: ZIP_PORT_NAME });
     port.onMessage.addListener((res: ZipPortResult) => { finish(res); port.disconnect(); });
     port.onDisconnect.addListener(() => finish({ queued: 0, error: "background との接続が切れました" }));
-    port.postMessage({ kind: "start", filename, conflictAction, totalBytes: bytes.byteLength } as ZipStartMessage);
+    port.postMessage({ kind: "start", filename, totalBytes: bytes.byteLength } as ZipStartMessage);
     for (let off = 0; off < bytes.byteLength; off += ZIP_CHUNK_BYTES) {
       const slice = bytes.subarray(off, Math.min(off + ZIP_CHUNK_BYTES, bytes.byteLength));
       port.postMessage({ kind: "chunk", data: bytesToBase64(slice) } as ZipChunkMessage);
@@ -63,33 +29,31 @@ function sendZipOverPort(
   });
 }
 
-// photo_gallery を zip にまとめ、background 経由で chrome.downloads.download する。
-// SW の dedup/reconcile(job-store)は通らない(zip は一発勝負。失敗したら 🔄 でやり直す)。
-async function makeAndDownloadZip(
-  block: ContentBlock,
-  post: PostData,
-  s: Settings,
-  _force: boolean,
-): Promise<{ queued: number; error?: string }> {
-  try {
-    return await makeAndDownloadZipInner(block, post, s);
-  } catch (e) {
-    return { queued: 0, error: e instanceof TemplateError ? `テンプレートエラー: ${e.message}` : String(e) };
-  }
+// --- zip 組み立て(直列化 + バジェット + フォールバック判定。Task 7 と同一実装) ---
+type GalleryZipResult = { ok: true } | { ok: false; reason: string };
+const enqueueZipJob = createSerialQueue();
+
+function tryZipGallery(block: ContentBlock, post: PostData, s: Settings): Promise<GalleryZipResult> {
+  return enqueueZipJob(() => tryZipGalleryInner(block, post, s))
+    .catch((e) => ({ ok: false as const, reason: String(e) }));
 }
 
-async function makeAndDownloadZipInner(
-  block: ContentBlock,
-  post: PostData,
-  s: Settings,
-): Promise<{ queued: number; error?: string }> {
+async function tryZipGalleryInner(block: ContentBlock, post: PostData, s: Settings): Promise<GalleryZipResult> {
+  const files = block.files.filter((f): f is FileItem & { directUrl: string } => !!f.directUrl);
+  if (files.length === 0) return { ok: false, reason: "directUrl のある photo がありません" };
+
+  // ソース収集: 各 URL の allowlist 検証(適用点 b)・件数上限・残バジェットの
+  // maxBytes 伝搬は collectZipSources(単体テスト対象)が行う。
+  const collected = await collectZipSources(files.map((f) => f.directUrl), (url, opts) => fetchBinary(url, opts));
+  if (!collected.ok) return { ok: false, reason: collected.reason };
+
   const entries: Record<string, Uint8Array> = {};
   const usedNames = new Set<string>();
   const now = new Date();
-  for (const f of block.files) {
-    if (!f.directUrl) continue;
-    const res = await call("fetchBinary", { url: f.directUrl });
-    if (!res.ok) return { queued: 0, error: `fetchBinary failed: ${res.error}` };
+  for (const f of files) {
+    const buf = collected.buffers.get(f.directUrl);
+    if (!buf) return { ok: false, reason: `zip ソース欠落: ${f.directUrl}` };
+
     const ctx: RenderContext = {
       creator: post.creator, creatorId: post.creatorId,
       postTitle: post.postTitle, postId: post.postId,
@@ -98,9 +62,13 @@ async function makeAndDownloadZipInner(
       contentType: f.contentType, plan: block.plan ?? "",
       filename: f.filename ?? "", ext: f.ext, seq: f.seq, total: f.total,
     };
-    let entryPath = renderTemplate(s.zipEntryTemplate, ctx,
-      { replacement: s.illegalCharReplacement, segmentMaxLen: s.segmentMaxLen });
-    // テンプレが $seq を含まない等で衝突しうる -> 静かな上書き(データ消失)を防ぐため連番を付与。
+    let entryPath: string;
+    try {
+      entryPath = renderTemplate(s.zipEntryTemplate, ctx,
+        { replacement: s.illegalCharReplacement, segmentMaxLen: s.segmentMaxLen });
+    } catch (e) {
+      return { ok: false, reason: e instanceof TemplateError ? `テンプレートエラー: ${e.message}` : String(e) };
+    }
     if (usedNames.has(entryPath)) {
       const dot = entryPath.lastIndexOf(".");
       const stem = dot > 0 ? entryPath.slice(0, dot) : entryPath;
@@ -110,12 +78,13 @@ async function makeAndDownloadZipInner(
       while (usedNames.has(candidate)) { n++; candidate = `${stem} (${n})${ext}`; }
       entryPath = candidate;
     }
+    const pv = validatePath(entryPath, { fullPathMaxLen: s.fullPathMaxLen, uniquifyHeadroom: s.uniquifyHeadroom, conflictAction: "overwrite", segmentMaxLen: s.segmentMaxLen });
+    if (!pv.ok) return { ok: false, reason: `zip entry 名不正: ${entryPath}: ${pv.error}` };
     usedNames.add(entryPath);
-    entries[entryPath] = new Uint8Array(res.buffer);
+    entries[entryPath] = buf;
   }
-  const zipped = zipSync(entries);
 
-  const firstFile = block.files[0];
+  const firstFile = files[0];
   const zipCtx: RenderContext = {
     creator: post.creator, creatorId: post.creatorId,
     postTitle: post.postTitle, postId: post.postId,
@@ -125,18 +94,44 @@ async function makeAndDownloadZipInner(
     filename: firstFile?.filename ?? "", ext: "zip",
     seq: 1, total: 1,
   };
-  const zipPath = renderTemplate(s.zipPathTemplate, zipCtx,
-    { replacement: s.illegalCharReplacement, segmentMaxLen: s.segmentMaxLen });
+  let zipPath: string;
+  try {
+    zipPath = renderTemplate(s.zipPathTemplate, zipCtx,
+      { replacement: s.illegalCharReplacement, segmentMaxLen: s.segmentMaxLen });
+  } catch (e) {
+    return { ok: false, reason: e instanceof TemplateError ? `テンプレートエラー: ${e.message}` : String(e) };
+  }
+  const zv = validatePath(zipPath, { fullPathMaxLen: s.fullPathMaxLen, uniquifyHeadroom: s.uniquifyHeadroom, conflictAction: DOWNLOAD_CONFLICT_ACTION, segmentMaxLen: s.segmentMaxLen });
+  if (!zv.ok) return { ok: false, reason: `zip ファイル名不正: ${zipPath}: ${zv.error}` };
 
-  // content-script は chrome.downloads にアクセスできない(拡張ページ/SW 限定)ため、
-  // zip バイト列を background に渡して Blob 化 + downloads.download させる。
-  return sendZipOverPort(zipPath, s.conflictAction, zipped);
+  let zipped: Uint8Array;
+  try {
+    zipped = await zipAsync(entries);
+  } catch (e) {
+    return { ok: false, reason: `zip 圧縮失敗: ${String(e)}` };
+  }
+  const r = await sendZipOverPort(zipPath, zipped);
+  if (r.queued !== 1) return { ok: false, reason: r.error ?? "zip の enqueue に失敗" };
+  return { ok: true };
 }
 
-async function runDownload(force: boolean): Promise<{ queued?: number; error?: string } | null> {
-  const postId = postIdFromUrl();
-  if (!postId) { alert("[fantia-dl] postId 不明"); return null; }
-  const fetched = await call("fetchPost", { postId });
+// --- DL 本体(投稿ページ・一覧カード共通のフロー) ----------------------------
+// in-flight ガード(spec round25)のコア判定は dom-helpers の
+// beginDownloadAttempt / endDownloadAttempt(純粋関数・単体テスト済み)。
+// ここはタブ内・揮発の Set を握って配線するだけ(永続化しない = dedup の復活ではない)。
+const inFlightPostIds = new Set<string>();
+
+async function runDownloadFor(postId: string): Promise<DownloadResult | null> {
+  if (!beginDownloadAttempt(inFlightPostIds, postId)) return null; // 多重起動は無視
+  try {
+    return await runDownloadInner(postId);
+  } finally {
+    endDownloadAttempt(inFlightPostIds, postId);
+  }
+}
+
+async function runDownloadInner(postId: string): Promise<DownloadResult | null> {
+  const fetched = await fetchPost(postId);
   if (!fetched.ok) { alert(`[fantia-dl] 取得失敗: ${fetched.error}`); return null; }
   const post = parsePost(fetched.json);
   const s = await loadSettings();
@@ -147,38 +142,91 @@ async function runDownload(force: boolean): Promise<{ queued?: number; error?: s
   };
   const items: EnqueueItem[] = [];
   let zipQueued = 0;
-  const zipErrors: string[] = [];
+  const errors: string[] = [];
+  const notices: string[] = [];
   for (const c of post.contents) {
     if (c.contentType === "photo" && c.files.length >= 2 && s.zipGalleries && s.contentTypes.photo) {
-      const r = await makeAndDownloadZip(c, post, s, force);
-      if (r.error) zipErrors.push(r.error); else zipQueued += r.queued;
-      continue;
+      const zr = await tryZipGallery(c, post, s);
+      if (zr.ok) { zipQueued += 1; continue; }
+      // enqueue 前の zip 失敗 → このギャラリーを個別ファイル DL へフォールバック
+      notices.push(`${ZIP_FALLBACK_NOTICE}(${zr.reason})`);
     }
     for (const f of c.files) {
       let url = f.directUrl ?? "";
       if (!url && f.downloadUri) {
-        const resolved = await call("resolveUrl", { downloadUri: f.downloadUri });
-        if (!resolved.ok) { console.warn("[fantia-dl] resolve 失敗", f.idemKey); continue; }
+        const resolved = await resolveUrl(f.downloadUri);
+        if (!resolved.ok) { errors.push(`${f.filename ?? ""}.${f.ext}: URL 解決失敗(${resolved.error})`); continue; }
         url = resolved.url;
       }
       items.push({
-        idemKey: f.idemKey, contentId: c.contentId, contentTitle: c.contentTitle ?? "",
+        contentId: c.contentId, contentTitle: c.contentTitle ?? "",
         contentType: f.contentType, plan: c.plan ?? "", filename: f.filename ?? "",
-        ext: f.ext, seq: f.seq, total: f.total, url, downloadUri: f.downloadUri, refetch: f.refetch,
+        ext: f.ext, seq: f.seq, total: f.total, url,
       });
     }
   }
 
-  let res: { queued?: number; error?: string } | null = null;
+  let queued = zipQueued;
   if (items.length > 0) {
-    res = await chrome.runtime.sendMessage({ kind: "enqueue", post: meta, items, pageUrl: location.href, force } as EnqueueMessage);
+    const res = (await chrome.runtime.sendMessage({ kind: "enqueue", post: meta, items, pageUrl: location.href } satisfies EnqueueMessage)) as EnqueueResponse | undefined;
+    if (!res) errors.push("background から応答がありません");
+    else { queued += res.queued; errors.push(...res.errors); }
   }
-  const queued = (res?.queued ?? 0) + zipQueued;
-  const error = [res?.error, ...zipErrors].filter(Boolean).join(" / ") || undefined;
-  if (error) alert(`[fantia-dl] エラー: ${error}`);
-  return { queued, error };
+  if (errors.length) alert(`[fantia-dl] エラー: ${errors.join(" / ")}`);
+  if (notices.length) alert(`[fantia-dl] お知らせ:\n${notices.join("\n")}`);
+  return { queued, errors, notices };
 }
 
+// --- ボタン共通 ---------------------------------------------------------------
+function styleBtn(b: HTMLButtonElement, small = false) {
+  if (small) {
+    // カード上に重なる小ボタン: 明るいサムネでも暗いサムネでも視認できるよう
+    // 濃い半透明背景 + 白文字 + 影でコントラストを確保(白背景の小ボタンは
+    // サムネイルに埋没する — fanbox-dl の実運用での見落とし報告に基づく知見)。
+    Object.assign(b.style, {
+      padding: "4px 10px", borderRadius: "6px", cursor: "pointer",
+      fontSize: "14px", fontWeight: "700", border: "1px solid rgba(255,255,255,.65)",
+      background: "rgba(0,0,0,.72)", color: "#fff", lineHeight: "1.4",
+      boxShadow: "0 1px 5px rgba(0,0,0,.5)",
+    });
+  } else {
+    Object.assign(b.style, {
+      padding: "6px 12px", borderRadius: "6px", cursor: "pointer", fontSize: "14px",
+    });
+  }
+}
+
+function swapText(b: HTMLButtonElement, temp: string, ms = 2500) {
+  const orig = b.dataset.origText ?? b.textContent ?? "";
+  if (!b.dataset.origText) b.dataset.origText = orig;
+  b.textContent = temp;
+  setTimeout(() => { b.textContent = b.dataset.origText || orig; b.disabled = false; }, ms);
+}
+
+// postId はクリック時に取得する(getPostId)。一覧カードはカード固有の postId を
+// クロージャで返し(カードは postId とボタンが 1:1)、投稿ページボタンはクリック
+// 時点の location.pathname から読む。トリガが違うだけで DL フローは同一。
+function makeDlButton(label: string, small: boolean, getPostId: () => string | null): HTMLButtonElement {
+  const b = document.createElement("button");
+  b.type = "button"; b.textContent = label; b.title = "この投稿をダウンロード";
+  styleBtn(b, small);
+  b.addEventListener("click", (ev) => {
+    // 信頼クリックゲート(spec round18): 合成クリックは無視する
+    if (!shouldHandleDlClick(ev)) return;
+    ev.preventDefault(); ev.stopPropagation(); // カード遷移を抑止
+    const postId = getPostId();
+    if (!postId || inFlightPostIds.has(postId)) return;
+    b.disabled = true;
+    runDownloadFor(postId).then((r) => {
+      if (r) swapText(b, `⬇ ${r.queued} 件開始`);
+      else b.disabled = false;
+    }).catch(() => { b.disabled = false; });
+  });
+  return b;
+}
+
+// --- 投稿ページ: h1.post-title 直後(fallback 固定右下) -----------------------
+// (配置は現行踏襲。h1.post-title は安定クラスのため fanbox-dl 式の日付行探索は不要 — spec YAGNI)
 function findTitleAnchor(): HTMLElement | null {
   return (
     document.querySelector<HTMLElement>(".the-post .post-header h1.post-title") ||
@@ -202,55 +250,16 @@ function whenTitleReady(cb: (title: HTMLElement | null) => void, timeoutMs = 500
   const tid = setTimeout(() => { obs.disconnect(); cb(null); }, timeoutMs);
 }
 
-function addButton() {
+function addPostPageButton() {
   if (document.getElementById("fdl-btn-container")) return;
 
   const container = document.createElement("div");
   container.id = "fdl-btn-container";
-  Object.assign(container.style, {
-    display: "flex", gap: "8px", margin: "8px 0",
-  });
+  Object.assign(container.style, { display: "flex", gap: "8px", margin: "8px 0" });
 
-  const styleBtn = (b: HTMLButtonElement) => {
-    Object.assign(b.style, {
-      padding: "6px 12px", borderRadius: "6px", cursor: "pointer", fontSize: "14px",
-    });
-  };
-
-  const swapText = (b: HTMLButtonElement, temp: string, ms = 2500) => {
-    const orig = b.dataset.origText ?? b.textContent ?? "";
-    if (!b.dataset.origText) b.dataset.origText = orig;
-    b.textContent = temp;
-    setTimeout(() => { b.textContent = b.dataset.origText || orig; b.disabled = false; }, ms);
-  };
-
-  const btn = document.createElement("button");
-  btn.id = "fdl-btn"; btn.type = "button"; btn.textContent = "⬇ fantia-dl";
-  btn.title = "ダウンロード(履歴があれば済んだ分はスキップ)";
-  styleBtn(btn);
-  btn.addEventListener("click", () => {
-    btn.disabled = true;
-    runDownload(false).then((r) => {
-      if (r && typeof r.queued === "number") swapText(btn, `⬇ ${r.queued} 件開始`);
-      else btn.disabled = false;
-    }).catch(() => { btn.disabled = false; });
-  });
-
-  const retryBtn = document.createElement("button");
-  retryBtn.id = "fdl-retry-btn"; retryBtn.type = "button"; retryBtn.textContent = "🔄";
-  retryBtn.title = "やり直し(この投稿の履歴を消して再ダウンロード)";
-  styleBtn(retryBtn);
-  retryBtn.addEventListener("click", () => {
-    if (!confirm("この投稿の DL 履歴を消して再ダウンロードします。よろしいですか?")) return;
-    retryBtn.disabled = true;
-    runDownload(true).then((r) => {
-      if (r && typeof r.queued === "number") swapText(retryBtn, `🔄 ${r.queued} 件`);
-      else retryBtn.disabled = false;
-    }).catch(() => { retryBtn.disabled = false; });
-  });
-
+  const btn = makeDlButton("⬇ fantia-dl", false, () => postIdFromPathname(location.pathname));
+  btn.id = "fdl-btn";
   container.appendChild(btn);
-  container.appendChild(retryBtn);
 
   whenTitleReady((title) => {
     if (document.getElementById("fdl-btn-container") && document.getElementById("fdl-btn-container") !== container) return;
@@ -265,4 +274,67 @@ function addButton() {
   });
 }
 
-(async () => { await injectPageScript(); addButton(); })();
+// --- 一覧ページ: 各カードに ⬇ --------------------------------------------------
+// 注入ガードは「ボタン要素の実在」ベース(anchor 側マーカー不使用。fanbox-dl 実証
+// パターン): ボタン自身に data-fdl-for={postId} を記録し、「既にあるか」は走査ごとに
+// 現在の DOM に実在するボタンを数え上げて判定する。ボタンノードが消えれば次回走査で
+// 自動的に「無い」ことになり、マーカーと実体の乖離が構造的に起きない。
+const INJECTED_BUTTON_SELECTOR = "[data-fdl-for]";
+
+function injectListButtons() {
+  const anchors = Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href*="/posts/"]'));
+  const postIds = anchors.map((a) => postIdFromHref(a.getAttribute("href") || ""));
+
+  // stale 検出: host(anchor の親)が再利用され href の postId だけ差し替わった場合、
+  // host に残る既存ボタンは古い postId を束縛したまま。現在の postId と食い違う
+  // ボタンはここで除去する(":scope >" で host の直接の子だけを見る — 深い探索だと
+  // 入れ子 anchor 構造で別カードのボタンを stale と誤判定して除去してしまう)。
+  for (let i = 0; i < anchors.length; i++) {
+    const postId = postIds[i];
+    if (!postId) continue;
+    const host = anchors[i].parentElement ?? anchors[i];
+    const existingBtn = host.querySelector<HTMLElement>(`:scope > ${INJECTED_BUTTON_SELECTOR}`);
+    if (existingBtn && existingBtn.dataset.fdlFor && existingBtn.dataset.fdlFor !== postId) {
+      existingBtn.remove();
+    }
+  }
+
+  const alreadyInjectedPostIds = new Set(
+    Array.from(document.querySelectorAll<HTMLElement>(INJECTED_BUTTON_SELECTOR))
+      .map((el) => el.dataset.fdlFor)
+      .filter((id): id is string => !!id)
+  );
+  const indices = selectPostAnchorIndicesToInject(postIds, alreadyInjectedPostIds);
+  for (const i of indices) {
+    const anchor = anchors[i];
+    const postId = postIds[i];
+    if (!postId) continue;
+    const host = anchor.parentElement ?? anchor;
+    if (getComputedStyle(host).position === "static") host.style.position = "relative";
+    const btn = makeDlButton("⬇", true, () => postId);
+    btn.dataset.fdlFor = postId; // このボタンがどの postId 用かを記録(実在ベースの dedup に使う)
+    // in-flight 中の postId の再注入は disabled で生成(spec round25: 再レンダリングで
+    // disabled なノードごと消えた場合に新品有効ボタンが重複クリックを許すのを防ぐ)
+    if (inFlightPostIds.has(postId)) btn.disabled = true;
+    Object.assign(btn.style, { position: "absolute", top: "6px", right: "6px", zIndex: "9999" });
+    host.appendChild(btn);
+  }
+}
+
+// --- watch --------------------------------------------------------------------
+// fantia は Rails のフルロード遷移が基本のため、1s interval + MutationObserver で
+// 無限スクロール・動的追加も拾える(spec 変更 B)。
+function sync() {
+  if (postIdFromPathname(location.pathname)) addPostPageButton();
+  if (isFanclubPostListPage(location.pathname)) injectListButtons();
+}
+
+function watch() {
+  setInterval(sync, 1000);
+  new MutationObserver(() => {
+    if (isFanclubPostListPage(location.pathname)) injectListButtons();
+  }).observe(document.body, { childList: true, subtree: true });
+  sync();
+}
+
+watch();

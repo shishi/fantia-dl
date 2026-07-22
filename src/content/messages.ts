@@ -1,5 +1,3 @@
-// page-script との call() ブリッジは kind: string で汎用化されているため、
-// "fetchBinary"(zip 用画像取得)を送っても型定義の追加は不要。
 export interface PostMeta {
   creator: string;
   creatorId: string;
@@ -8,8 +6,9 @@ export interface PostMeta {
   postedAtIso: string;
 }
 
+// fire-and-forget 化(spec 変更 A)に伴い idemKey / refetch / force / downloadUri を廃止。
+// SW は item を検証して downloads.download に投げっぱなすだけで、履歴を持たない。
 export interface EnqueueItem {
-  idemKey: string;
   contentId: string;
   contentTitle: string;
   contentType: string;
@@ -19,8 +18,6 @@ export interface EnqueueItem {
   seq: number;
   total: number;
   url: string;
-  downloadUri?: string;
-  refetch: { postId: string; contentId: string; index: number };
 }
 
 export interface EnqueueMessage {
@@ -28,14 +25,21 @@ export interface EnqueueMessage {
   post: PostMeta;
   items: EnqueueItem[];
   pageUrl: string;
-  force?: boolean;
 }
 
-// options ページから SW へ「DL 履歴を全部クリア」を依頼するメッセージ。
-// jobs キーへの書き込みは SW だけが行う不変条件を保つため、options.ts は
-// chrome.storage.local を直接叩かずこのメッセージ経由で SW に処理させる。
-export interface ClearHistoryMessage {
-  kind: "clearHistory";
+// SW の応答。アイテム単位の失敗は黙って落とさず、どのアイテムか識別できる文言で
+// errors に積む(spec 統一応答契約)。部分成功は queued > 0 かつ errors あり。
+export interface EnqueueResponse {
+  queued: number;
+  errors: string[];
+}
+
+// content script 側の統一応答契約(fanbox-dl の DownloadResponse と同型。spec round13/14)。
+// notices は情報通知(zip フォールバック等)、errors は「実際に保存できなかったもの」だけ。
+export interface DownloadResult {
+  queued: number;
+  errors: string[];
+  notices: string[];
 }
 
 // zip 化した photo gallery を background に渡して chrome.downloads.download させる。
@@ -47,10 +51,11 @@ export interface ClearHistoryMessage {
 // start -> chunk* -> end のチャンク転送にする(ポート内メッセージ順序は保証される)。
 export const ZIP_PORT_NAME = "zipDownload";
 
+// zip は Port 経由で conflictAction を運ばない(spec 変更 A-4 round3)。
+// SW 側は DOWNLOAD_CONFLICT_ACTION 定数を直接使う。
 export interface ZipStartMessage {
   kind: "start";
   filename: string;
-  conflictAction: "uniquify" | "overwrite";
   totalBytes: number;
 }
 export interface ZipChunkMessage {

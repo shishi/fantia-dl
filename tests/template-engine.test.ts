@@ -51,4 +51,30 @@ describe("renderTemplate", () => {
   it("未知プレースホルダは TemplateError", () => {
     expect(() => renderTemplate("$nope", base, O)).toThrow(TemplateError);
   });
+
+  describe("slash 中和(プレースホルダ展開値の / を replacement に置換)", () => {
+    it("サーバ由来値(postTitle 等)の / は置換される", () => {
+      expect(renderTemplate("$creator/$postTitle/$filename.$ext", { ...base, postTitle: "お知らせ 1/2" }, O))
+        .toBe("sample_creator/お知らせ 1_2/foo.png");
+    });
+    it("filename の / も置換される(zipEntryTemplate 相当)", () => {
+      expect(renderTemplate("[$seq{3}_]$filename.$ext", { ...base, filename: "a/b" }, O)).toBe("001_a_b.png");
+    });
+    it("テンプレート literal の / は separator として不変", () => {
+      expect(renderTemplate("a/b/$filename.$ext", base, O)).toBe("a/b/foo.png");
+    });
+    it("$date{YYYY/MM} の / は不変(ユーザー自身のフォーマット文字列由来)", () => {
+      expect(renderTemplate("$date{YYYY/MM}", base, O)).toBe("2026/01");
+    });
+    it("$today{YYYY/MM} の / も不変", () => {
+      expect(renderTemplate("$today{YYYY/MM}", base, O)).toBe("2026/07");
+    });
+    it("オプショナルグループ内の値も中和される", () => {
+      expect(renderTemplate("a[/$contentTitle]b", { ...base, contentTitle: "x/y" }, O)).toBe("a/x_yb");
+    });
+    it("置換文字は opts.replacement に従う", () => {
+      expect(renderTemplate("$postTitle", { ...base, postTitle: "a/b" }, { replacement: "-", segmentMaxLen: 200 }))
+        .toBe("a-b");
+    });
+  });
 });

@@ -9,8 +9,6 @@ export interface FileItem {
   ext: string;               // 拡張子(ドットなし)
   seq: number;               // ブロック内 1-based index
   total: number;             // ブロック内総数
-  idemKey: string;           // 安定キー "postId:contentId:index"
-  refetch: { postId: string; contentId: string; index: number };
 }
 
 export interface ContentBlock {
@@ -43,7 +41,6 @@ export interface RenderContext {
 export interface Settings {
   pathTemplate: string;
   illegalCharReplacement: string;
-  conflictAction: "uniquify" | "overwrite";
   contentTypes: { photo: boolean; file: boolean; video: boolean };
   segmentMaxLen: number;
   fullPathMaxLen: number;

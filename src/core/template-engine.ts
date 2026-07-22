@@ -79,13 +79,26 @@ function evalPh(name: string, arg: string | undefined, ctx: RenderContext): stri
   }
 }
 
-function render(nodes: Node[], ctx: RenderContext): { text: string; hadPh: boolean; anyEmpty: boolean } {
+// プレースホルダ展開値の / は replacement に中和する(spec 変更 C)。
+// - 対象: $date / $today を除く全プレースホルダ。サーバ由来値にたまたま含まれる
+//   / が意図しないディレクトリを切るのを防ぐ。除外リスト方式なので、将来の
+//   プレースホルダ追加時は安全側(中和される)に倒れる。
+// - 非対象: テンプレート literal の /(separator)と、$date{}/$today{} の出力
+//   (options ヘルプが「$date{} 内の非トークン文字はそのまま出力」と明記しており、
+//   $date{YYYY/MM} の / はユーザー自身が書いた意図された区切りのため)。
+const NEUTRALIZE_EXEMPT = new Set(["date", "today"]);
+
+function render(nodes: Node[], ctx: RenderContext, replacement: string): { text: string; hadPh: boolean; anyEmpty: boolean } {
   let text = ""; let hadPh = false; let anyEmpty = false;
   for (const n of nodes) {
     if (n.t === "lit") text += n.v;
-    else if (n.t === "ph") { const v = evalPh(n.name, n.arg, ctx); hadPh = true; if (v === "") anyEmpty = true; text += v; }
+    else if (n.t === "ph") {
+      let v = evalPh(n.name, n.arg, ctx);
+      if (!NEUTRALIZE_EXEMPT.has(n.name)) v = v.split("/").join(replacement);
+      hadPh = true; if (v === "") anyEmpty = true; text += v;
+    }
     else {
-      const r = render(n.children, ctx);
+      const r = render(n.children, ctx, replacement);
       hadPh = hadPh || r.hadPh; anyEmpty = anyEmpty || r.anyEmpty;
       if (!(r.hadPh && r.anyEmpty)) text += r.text;
     }
@@ -98,7 +111,7 @@ export function renderTemplate(
   ctx: RenderContext,
   opts: { replacement: string; segmentMaxLen: number }
 ): string {
-  const raw = render(parse(template), ctx).text;
+  const raw = render(parse(template), ctx, opts.replacement).text;
   const segs = raw.split("/");
   return segs
     .map((s, idx) => sanitizeSegment(s, { replacement: opts.replacement, maxLen: opts.segmentMaxLen, preserveExt: idx === segs.length - 1 }))
