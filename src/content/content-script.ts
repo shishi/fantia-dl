@@ -6,38 +6,9 @@ import { loadSettings } from "../core/settings";
 import { renderTemplate, TemplateError } from "../core/template-engine";
 import { bytesToBase64 } from "../core/base64";
 import type { ContentBlock, PostData, RenderContext, Settings } from "../core/types";
+import { fetchPost, resolveUrl, fetchBinary } from "./fantia-api";
 
-const csrf = () => document.querySelector<HTMLMetaElement>('meta[name="csrf-token"]')?.content ?? "";
 const postIdFromUrl = () => location.pathname.match(/posts\/(\d+)/)?.[1] ?? null;
-
-function injectPageScript(): Promise<void> {
-  return new Promise((res) => {
-    const onReady = (ev: MessageEvent) => {
-      if (ev.source !== window) return;
-      if (ev.data?.__fdl === "ready") { window.removeEventListener("message", onReady); res(); }
-    };
-    window.addEventListener("message", onReady);
-    const s = document.createElement("script");
-    s.src = chrome.runtime.getURL("content/page-script.js");
-    (document.head || document.documentElement).appendChild(s);
-  });
-}
-
-let reqSeq = 0;
-function call(kind: string, extra: Record<string, unknown>): Promise<any> {
-  const reqId = ++reqSeq;
-  return new Promise((res) => {
-    const on = (ev: MessageEvent) => {
-      if (ev.source !== window) return;
-      if (ev.data?.__fdl === "res" && ev.data.reqId === reqId) {
-        window.removeEventListener("message", on);
-        res(ev.data);
-      }
-    };
-    window.addEventListener("message", on);
-    window.postMessage({ __fdl: "req", reqId, kind, csrf: csrf(), ...extra }, "*");
-  });
-}
 
 const ZIP_CHUNK_BYTES = 4 * 1024 * 1024; // 1 メッセージ上限を避けるためのチャンクサイズ
 
@@ -86,7 +57,7 @@ async function makeAndDownloadZipInner(
   const now = new Date();
   for (const f of block.files) {
     if (!f.directUrl) continue;
-    const res = await call("fetchBinary", { url: f.directUrl });
+    const res = await fetchBinary(f.directUrl);
     if (!res.ok) return { queued: 0, error: `fetchBinary failed: ${res.error}` };
     const ctx: RenderContext = {
       creator: post.creator, creatorId: post.creatorId,
@@ -134,7 +105,7 @@ async function makeAndDownloadZipInner(
 async function runDownload(): Promise<DownloadResult | null> {
   const postId = postIdFromUrl();
   if (!postId) { alert("[fantia-dl] postId 不明"); return null; }
-  const fetched = await call("fetchPost", { postId });
+  const fetched = await fetchPost(postId);
   if (!fetched.ok) { alert(`[fantia-dl] 取得失敗: ${fetched.error}`); return null; }
   const post = parsePost(fetched.json);
   const s = await loadSettings();
@@ -156,9 +127,9 @@ async function runDownload(): Promise<DownloadResult | null> {
     for (const f of c.files) {
       let url = f.directUrl ?? "";
       if (!url && f.downloadUri) {
-        const resolved = await call("resolveUrl", { downloadUri: f.downloadUri });
+        const resolved = await resolveUrl(f.downloadUri);
         // 統一応答契約: アイテム単位の失敗は黙って落とさず、識別可能な文言で errors に積む
-        if (!resolved.ok) { errors.push(`${f.filename ?? ""}.${f.ext}: URL 解決失敗(${resolved.error ?? "不明"})`); continue; }
+        if (!resolved.ok) { errors.push(`${f.filename ?? ""}.${f.ext}: URL 解決失敗(${resolved.error})`); continue; }
         url = resolved.url;
       }
       items.push({
@@ -252,4 +223,4 @@ function addButton() {
   });
 }
 
-(async () => { await injectPageScript(); addButton(); })();
+addButton();
