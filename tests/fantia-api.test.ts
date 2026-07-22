@@ -72,6 +72,20 @@ describe("resolveUrl", () => {
     const r = await resolveUrl("/posts/1/download/2", { fetchFn: async () => makeRes({ status: 404 }), csrf: () => "t" });
     expect(r).toEqual({ ok: false, error: "status 404" });
   });
+  it("外部ホストへの download_uri は fetch せず拒否する(入力ガード)", async () => {
+    let fetched = false;
+    const r = await resolveUrl("https://evil.com/x", { fetchFn: async () => { fetched = true; return makeRes({}); }, csrf: () => "t" });
+    expect(r.ok).toBe(false);
+    expect(fetched).toBe(false);
+  });
+  it("解決先が許可外ホストなら fail-closed(出力ガード)", async () => {
+    const r = await resolveUrl("/posts/1/download/2", {
+      fetchFn: async () => makeRes({ url: "https://evil.example.com/file.mp4", body: { cancel: async () => {} } }),
+      csrf: () => "t",
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("許可外");
+  });
 });
 
 describe("fetchBinary", () => {

@@ -43,4 +43,9 @@ describe("planEnqueue(SW enqueue の純粋部分: render→validate→dedup)", (
     expect(r.downloads).toHaveLength(0);
     expect(r.errors[0]).toContain("テンプレートエラー");
   });
+  it("allowlist 外 URL の item は downloads に載らず errors に積まれる(DL 前 allowlist 適用点 a)", () => {
+    const r = planEnqueue(msg([{ url: "https://evil.example.com/a.png" }]), DEFAULT_SETTINGS);
+    expect(r.downloads).toHaveLength(0);
+    expect(r.errors[0]).toContain("許可外ホスト");
+  });
 });

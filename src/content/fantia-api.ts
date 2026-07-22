@@ -5,6 +5,8 @@
 // 守るのではなくチャネルごと削除した(spec 変更 B round19)。MV3 の isolated world
 // fetch はページと同じ CORS/cookie 挙動で、csrf meta も DOM から読めるため機能は等価。
 
+import { validateDownloadUrl, validateResolveInput } from "../core/url-allowlist";
+
 export interface ApiResponse {
   ok: boolean;
   status: number;
@@ -63,16 +65,14 @@ export async function resolveUrl(
 ): Promise<{ ok: true; url: string } | { ok: false; error: string }> {
   const fetchFn = deps.fetchFn ?? realFetch;
   const csrf = deps.csrf ?? csrfToken;
-  let target: string;
+  const input = validateResolveInput(downloadUri);
+  if (!input.ok) return { ok: false, error: input.error };
   try {
-    target = new URL(downloadUri, "https://fantia.jp").toString();
-  } catch {
-    return { ok: false, error: `download_uri が不正: ${downloadUri}` };
-  }
-  try {
-    const r = await fetchWithCsrfRetry(target, { Range: "bytes=0-0" }, fetchFn, csrf);
+    const r = await fetchWithCsrfRetry(input.url, { Range: "bytes=0-0" }, fetchFn, csrf);
     try { await r.body?.cancel(); } catch { /* 既読/クローズ済みは無視 */ }
     if (!r.ok) return { ok: false, error: `status ${r.status}` };
+    const out = validateDownloadUrl(r.url);
+    if (!out.ok) return { ok: false, error: `解決先が許可外: ${out.error}` };
     return { ok: true, url: r.url };
   } catch (e) {
     return { ok: false, error: String(e) };

@@ -7,6 +7,7 @@ import { renderTemplate, TemplateError } from "../core/template-engine";
 import { bytesToBase64 } from "../core/base64";
 import type { ContentBlock, PostData, RenderContext, Settings } from "../core/types";
 import { fetchPost, resolveUrl, fetchBinary } from "./fantia-api";
+import { validateDownloadUrl } from "../core/url-allowlist";
 
 const postIdFromUrl = () => location.pathname.match(/posts\/(\d+)/)?.[1] ?? null;
 
@@ -57,6 +58,8 @@ async function makeAndDownloadZipInner(
   const now = new Date();
   for (const f of block.files) {
     if (!f.directUrl) continue;
+    const uv = validateDownloadUrl(f.directUrl);
+    if (!uv.ok) return { queued: 0, error: uv.error };
     const res = await fetchBinary(f.directUrl);
     if (!res.ok) return { queued: 0, error: `fetchBinary failed: ${res.error}` };
     const ctx: RenderContext = {

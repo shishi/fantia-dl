@@ -4,6 +4,7 @@
 // Task 6 で DL 前 URL allowlist(spec 変更 B round15 の適用点 a)がここに加わる。
 import { renderTemplate, TemplateError } from "../core/template-engine";
 import { validatePath } from "../core/path-validator";
+import { validateDownloadUrl } from "../core/url-allowlist";
 import { DOWNLOAD_CONFLICT_ACTION } from "../core/settings";
 import type { RenderContext, Settings } from "../core/types";
 import type { EnqueueItem, EnqueueMessage, PostMeta } from "../content/messages";
@@ -32,6 +33,8 @@ export function planEnqueue(msg: EnqueueMessage, s: Settings): { downloads: Plan
   for (const it of msg.items) {
     if (!enabled(it.contentType)) continue;
     if (!it.url) { errors.push(`${it.filename || it.contentId}.${it.ext}: url 未解決`); continue; }
+    const uv = validateDownloadUrl(it.url);
+    if (!uv.ok) { errors.push(`${it.filename || it.contentId}.${it.ext}: ${uv.error}`); continue; }
     let relPath: string;
     try {
       relPath = renderTemplate(s.pathTemplate, ctxOf(msg.post, it), { replacement: s.illegalCharReplacement, segmentMaxLen: s.segmentMaxLen });
