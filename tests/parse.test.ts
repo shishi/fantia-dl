@@ -20,7 +20,6 @@ describe("parsePost", () => {
     expect(c.files[0].seq).toBe(1);
     expect(c.files[1].seq).toBe(2);
     expect(c.files[0].total).toBe(2);
-    expect(c.files[0].idemKey).toBe("1234567:42:0");
   });
   it("file(.mp4) を video として解析する", () => {
     const p = parsePost(fileJson);

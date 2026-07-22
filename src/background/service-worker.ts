@@ -1,10 +1,7 @@
 import { loadSettings, DOWNLOAD_CONFLICT_ACTION } from "../core/settings";
-import { renderTemplate, TemplateError } from "../core/template-engine";
-import { validatePath } from "../core/path-validator";
-import type { RenderContext, Settings } from "../core/types";
-import type { EnqueueMessage, EnqueueItem, PostMeta, ZipPortMessage, ZipPortResult } from "../content/messages";
+import { planEnqueue } from "./enqueue-plan";
+import type { EnqueueMessage, EnqueueResponse, ZipPortMessage, ZipPortResult } from "../content/messages";
 import { ZIP_PORT_NAME } from "../content/messages";
-import { getAllJobs, putJobs, updateJob, findByDownloadId, removeJobsByPostId, sweepOldDoneJobs, clearAllJobs, type JobRecord } from "./job-store";
 import { OFFSCREEN_TARGET } from "../offscreen/protocol";
 import type {
   OffscreenAbortMessage,
@@ -14,68 +11,30 @@ import type {
   OffscreenResult,
 } from "../offscreen/protocol";
 
-function ctxOf(post: PostMeta, it: EnqueueItem): RenderContext {
-  return {
-    creator: post.creator, creatorId: post.creatorId, postTitle: post.postTitle, postId: post.postId,
-    postedAt: new Date(post.postedAtIso), now: new Date(),
-    contentTitle: it.contentTitle, contentId: it.contentId, contentType: it.contentType, plan: it.plan,
-    filename: it.filename, ext: it.ext, seq: it.seq, total: it.total,
-  };
-}
-
-async function handleEnqueue(msg: EnqueueMessage): Promise<{ queued: number; error?: string }> {
-  const s: Settings = await loadSettings();
-  if (msg.force) {
-    await removeJobsByPostId(msg.post.postId);
-  }
-  const enabled = (t: string) => (s.contentTypes as any)[t] !== false;
-  const jobs: JobRecord[] = [];
-  const seenPaths = new Set<string>();
-  const errors: string[] = [];
-
-  for (const it of msg.items) {
-    if (!enabled(it.contentType)) continue;
-    if (!it.url) { errors.push(`${it.idemKey}: url 未解決`); continue; }
-    let relPath: string;
+// fire-and-forget(spec 変更 A): planEnqueue(純粋・単体テスト対象)が決めた item を
+// downloads.download に投げっぱなしにし、結果を永続追跡しない。同名衝突は uniquify
+// 固定に委ね、失敗した DL の復旧はユーザーの再クリック(photo の署名 URL もそのとき
+// 取り直される)。アイテム単位の失敗は黙って落とさず errors に積む(統一応答契約)。
+async function handleEnqueue(msg: EnqueueMessage): Promise<EnqueueResponse> {
+  const s = await loadSettings();
+  const { downloads, errors } = planEnqueue(msg, s);
+  let queued = 0;
+  for (const d of downloads) {
     try {
-      relPath = renderTemplate(s.pathTemplate, ctxOf(msg.post, it), { replacement: s.illegalCharReplacement, segmentMaxLen: s.segmentMaxLen });
+      await chrome.downloads.download({ url: d.url, filename: d.relPath, saveAs: false, conflictAction: DOWNLOAD_CONFLICT_ACTION });
+      queued++;
     } catch (e) {
-      errors.push(e instanceof TemplateError ? `テンプレートエラー: ${e.message}` : String(e));
-      break; // テンプレ不正は全体中断
+      errors.push(`${d.relPath}: ${String(e)}`);
     }
-    const v = validatePath(relPath, { fullPathMaxLen: s.fullPathMaxLen, uniquifyHeadroom: s.uniquifyHeadroom, conflictAction: DOWNLOAD_CONFLICT_ACTION, segmentMaxLen: s.segmentMaxLen });
-    if (!v.ok) { errors.push(`${relPath}: ${v.error}`); continue; }
-    if (seenPaths.has(relPath)) { errors.push(`バッチ内パス重複: ${relPath}`); continue; }
-    seenPaths.add(relPath);
-    jobs.push({ idemKey: it.idemKey, relPath, url: it.url, downloadUri: it.downloadUri, contentType: it.contentType, refetch: it.refetch, state: "pending" });
   }
-
-  if (errors.length) return { queued: 0, error: errors.slice(0, 5).join(" / ") };
-  const existing = await getAllJobs();
-  const toStart = jobs.filter((j) => {
-    const prev = existing[j.idemKey];
-    return !(prev && (prev.state === "done" || prev.state === "requested"));
-  });
-  await putJobs(toStart);
-  for (const j of toStart) await startDownload(j, s);
-  return { queued: toStart.length };
-}
-
-async function startDownload(j: JobRecord, s: Settings): Promise<void> {
-  try {
-    const downloadId = await chrome.downloads.download({ url: j.url, filename: j.relPath, saveAs: false, conflictAction: DOWNLOAD_CONFLICT_ACTION });
-    await updateJob(j.idemKey, { state: "requested", downloadId });
-  } catch (e) {
-    await updateJob(j.idemKey, { state: "error", error: String(e) });
-  }
+  return { queued, errors };
 }
 
 // --- zip 化した photo gallery の DL -----------------------------------------
 //
 // Service Worker には DOM が無く URL.createObjectURL が使えない(MV3 の既知の
 // 制約)ため、Blob 組み立て + object URL 発行は Offscreen Document に委譲する。
-// job-store は通さない(dedup/reconcile 対象外の一発勝負。失敗時はユーザーが
-// 🔄 で再実行する)。
+// 履歴は持たない(fire-and-forget な一発勝負。失敗時はユーザーが再クリックする)。
 //
 // zip 本体は content-script から Port 経由で start -> chunk* -> end の
 // チャンク(base64 文字列)として届く。ここではデコードせず、受け取った base64
@@ -202,12 +161,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.kind === "enqueue") {
     handleEnqueue(msg as EnqueueMessage)
       .then(sendResponse)
-      .catch((e) => sendResponse({ queued: 0, error: String(e) }));
-    return true;
-  } else if (msg?.kind === "clearHistory") {
-    clearAllJobs()
-      .then(() => sendResponse({ ok: true }))
-      .catch((e) => sendResponse({ ok: false, error: String(e) }));
+      .catch((e) => sendResponse({ queued: 0, errors: [String(e)] } satisfies EnqueueResponse));
     return true;
   }
   return false;
@@ -219,20 +173,10 @@ chrome.downloads.onChanged.addListener(async (delta) => {
   if (cur !== "complete" && cur !== "interrupted") return;
 
   const zipUrl = zipDownloads.get(delta.id);
-  if (zipUrl !== undefined) {
-    zipDownloads.delete(delta.id);
-    await persistZipDownloads();
-    await revokeOffscreenUrl(zipUrl);
-    return;
-  }
-
-  const j = await findByDownloadId(delta.id);
-  if (!j) return;
-  if (cur === "complete") await updateJob(j.idemKey, { state: "done", doneAt: Date.now() });
-  else {
-    // photo は署名 URL 失効の可能性 -> needs_page で退避。file は download_uri 安定なので error 記録。
-    await updateJob(j.idemKey, { state: j.contentType === "photo" ? "needs_page" : "error", error: "interrupted" });
-  }
+  if (zipUrl === undefined) return; // 通常 DL は追跡しない(fire-and-forget)
+  zipDownloads.delete(delta.id);
+  await persistZipDownloads();
+  await revokeOffscreenUrl(zipUrl);
 });
 
 // 起動時 reconcile (zip DL): SW がサスペンドしていた間に完了/中断していた zip DL は
@@ -251,20 +195,6 @@ chrome.downloads.onChanged.addListener(async (delta) => {
   await persistZipDownloads();
 })();
 
-// 起動時 reconcile (通常 DL)
-(async () => {
-  const s = await loadSettings();
-  const all = await getAllJobs();
-  for (const j of Object.values(all)) {
-    if (j.state === "pending") { await startDownload(j, s); continue; }
-    if (j.state !== "requested") continue;
-    if (j.downloadId == null) { await startDownload(j, s); continue; }
-    const [d] = await chrome.downloads.search({ id: j.downloadId });
-    if (!d) { await startDownload(j, s); continue; }
-    if (d.state === "complete") await updateJob(j.idemKey, { state: "done", doneAt: Date.now() });
-    else if (d.state === "interrupted") await updateJob(j.idemKey, { state: j.contentType === "photo" ? "needs_page" : "error" });
-  }
-  // 完了から 1 年以上経過した done ジョブを間引く(chrome.storage.local の肥大化防止)。
-  // doneAt を持たないレガシー done ジョブはここでは触らない(job-store.ts 参照)。
-  await sweepOldDoneJobs(365 * 24 * 60 * 60 * 1000);
-})();
+// migration(fantia 固有): 既存ユーザーの chrome.storage.local に残る旧履歴
+// (jobs キー)を除去する。冪等・毎起動実行で害なし(spec 変更 A)。
+void chrome.storage.local.remove("jobs");

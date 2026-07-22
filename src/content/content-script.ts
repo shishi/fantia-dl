@@ -1,5 +1,5 @@
 import { parsePost } from "../fantia/parse";
-import type { EnqueueItem, EnqueueMessage, PostMeta, ZipPortResult, ZipStartMessage, ZipChunkMessage, ZipEndMessage } from "./messages";
+import type { EnqueueItem, EnqueueMessage, EnqueueResponse, DownloadResult, PostMeta, ZipPortResult, ZipStartMessage, ZipChunkMessage, ZipEndMessage } from "./messages";
 import { ZIP_PORT_NAME } from "./messages";
 import { zipSync } from "fflate";
 import { loadSettings } from "../core/settings";
@@ -63,12 +63,11 @@ function sendZipOverPort(
 }
 
 // photo_gallery を zip にまとめ、background 経由で chrome.downloads.download する。
-// SW の dedup/reconcile(job-store)は通らない(zip は一発勝負。失敗したら 🔄 でやり直す)。
+// 履歴は持たない(zip は一発勝負。失敗したら再クリックでやり直す)。
 async function makeAndDownloadZip(
   block: ContentBlock,
   post: PostData,
   s: Settings,
-  _force: boolean,
 ): Promise<{ queued: number; error?: string }> {
   try {
     return await makeAndDownloadZipInner(block, post, s);
@@ -132,7 +131,7 @@ async function makeAndDownloadZipInner(
   return sendZipOverPort(zipPath, zipped);
 }
 
-async function runDownload(force: boolean): Promise<{ queued?: number; error?: string } | null> {
+async function runDownload(): Promise<DownloadResult | null> {
   const postId = postIdFromUrl();
   if (!postId) { alert("[fantia-dl] postId 不明"); return null; }
   const fetched = await call("fetchPost", { postId });
@@ -146,36 +145,39 @@ async function runDownload(force: boolean): Promise<{ queued?: number; error?: s
   };
   const items: EnqueueItem[] = [];
   let zipQueued = 0;
-  const zipErrors: string[] = [];
+  const errors: string[] = [];
+  const notices: string[] = []; // zip フォールバック通知用(Task 7 で使用開始)
   for (const c of post.contents) {
     if (c.contentType === "photo" && c.files.length >= 2 && s.zipGalleries && s.contentTypes.photo) {
-      const r = await makeAndDownloadZip(c, post, s, force);
-      if (r.error) zipErrors.push(r.error); else zipQueued += r.queued;
+      const r = await makeAndDownloadZip(c, post, s);
+      if (r.error) errors.push(r.error); else zipQueued += r.queued;
       continue;
     }
     for (const f of c.files) {
       let url = f.directUrl ?? "";
       if (!url && f.downloadUri) {
         const resolved = await call("resolveUrl", { downloadUri: f.downloadUri });
-        if (!resolved.ok) { console.warn("[fantia-dl] resolve 失敗", f.idemKey); continue; }
+        // 統一応答契約: アイテム単位の失敗は黙って落とさず、識別可能な文言で errors に積む
+        if (!resolved.ok) { errors.push(`${f.filename ?? ""}.${f.ext}: URL 解決失敗(${resolved.error ?? "不明"})`); continue; }
         url = resolved.url;
       }
       items.push({
-        idemKey: f.idemKey, contentId: c.contentId, contentTitle: c.contentTitle ?? "",
+        contentId: c.contentId, contentTitle: c.contentTitle ?? "",
         contentType: f.contentType, plan: c.plan ?? "", filename: f.filename ?? "",
-        ext: f.ext, seq: f.seq, total: f.total, url, downloadUri: f.downloadUri, refetch: f.refetch,
+        ext: f.ext, seq: f.seq, total: f.total, url,
       });
     }
   }
 
-  let res: { queued?: number; error?: string } | null = null;
+  let queued = zipQueued;
   if (items.length > 0) {
-    res = await chrome.runtime.sendMessage({ kind: "enqueue", post: meta, items, pageUrl: location.href, force } as EnqueueMessage);
+    const res = (await chrome.runtime.sendMessage({ kind: "enqueue", post: meta, items, pageUrl: location.href } satisfies EnqueueMessage)) as EnqueueResponse | undefined;
+    if (!res) errors.push("background から応答がありません");
+    else { queued += res.queued; errors.push(...res.errors); }
   }
-  const queued = (res?.queued ?? 0) + zipQueued;
-  const error = [res?.error, ...zipErrors].filter(Boolean).join(" / ") || undefined;
-  if (error) alert(`[fantia-dl] エラー: ${error}`);
-  return { queued, error };
+  if (errors.length) alert(`[fantia-dl] エラー: ${errors.join(" / ")}`);
+  if (notices.length) alert(`[fantia-dl] お知らせ:\n${notices.join("\n")}`);
+  return { queued, errors, notices };
 }
 
 function findTitleAnchor(): HTMLElement | null {
@@ -225,31 +227,17 @@ function addButton() {
 
   const btn = document.createElement("button");
   btn.id = "fdl-btn"; btn.type = "button"; btn.textContent = "⬇ fantia-dl";
-  btn.title = "ダウンロード(履歴があれば済んだ分はスキップ)";
+  btn.title = "この投稿をダウンロード";
   styleBtn(btn);
   btn.addEventListener("click", () => {
     btn.disabled = true;
-    runDownload(false).then((r) => {
-      if (r && typeof r.queued === "number") swapText(btn, `⬇ ${r.queued} 件開始`);
+    runDownload().then((r) => {
+      if (r) swapText(btn, `⬇ ${r.queued} 件開始`);
       else btn.disabled = false;
     }).catch(() => { btn.disabled = false; });
   });
 
-  const retryBtn = document.createElement("button");
-  retryBtn.id = "fdl-retry-btn"; retryBtn.type = "button"; retryBtn.textContent = "🔄";
-  retryBtn.title = "やり直し(この投稿の履歴を消して再ダウンロード)";
-  styleBtn(retryBtn);
-  retryBtn.addEventListener("click", () => {
-    if (!confirm("この投稿の DL 履歴を消して再ダウンロードします。よろしいですか?")) return;
-    retryBtn.disabled = true;
-    runDownload(true).then((r) => {
-      if (r && typeof r.queued === "number") swapText(retryBtn, `🔄 ${r.queued} 件`);
-      else retryBtn.disabled = false;
-    }).catch(() => { retryBtn.disabled = false; });
-  });
-
   container.appendChild(btn);
-  container.appendChild(retryBtn);
 
   whenTitleReady((title) => {
     if (document.getElementById("fdl-btn-container") && document.getElementById("fdl-btn-container") !== container) return;

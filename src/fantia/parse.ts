@@ -38,7 +38,7 @@ export function parsePost(json: any): PostData {
         .filter((u: any): u is string => typeof u === "string");
       files = photos.map((url: string) => ({
         contentType, directUrl: url, filename: baseNoExt(url), ext: extFromUrl(url),
-        seq: 0, total: 0, idemKey: "", refetch: { postId, contentId, index: 0 },
+        seq: 0, total: 0,
       }));
     } else if (c.category === "file") {
       if (c.filename && c.download_uri) {
@@ -48,13 +48,13 @@ export function parsePost(json: any): PostData {
         contentType = VIDEO_EXT.has(ext) ? "video" : "file";
         files = [{
           contentType, downloadUri: String(c.download_uri), filename: base, ext,
-          seq: 0, total: 0, idemKey: "", refetch: { postId, contentId, index: 0 },
+          seq: 0, total: 0,
         }];
       }
     }
 
     if (!files.length) continue;
-    files.forEach((f, i) => { f.seq = i + 1; f.total = files.length; f.idemKey = `${postId}:${contentId}:${i}`; f.refetch = { postId, contentId, index: i }; });
+    files.forEach((f, i) => { f.seq = i + 1; f.total = files.length; });
     contents.push({ contentId, contentTitle: c.title || null, contentType, plan: c.plan?.name ?? null, files });
   }
 
