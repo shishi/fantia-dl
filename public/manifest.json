@@ -7,7 +7,7 @@
   "host_permissions": ["https://fantia.jp/*", "https://*.fantia.jp/*"],
   "background": { "service_worker": "background/service-worker.js", "type": "module" },
   "content_scripts": [
-    { "matches": ["https://fantia.jp/posts/*"], "js": ["content/content-script.js"], "run_at": "document_idle" }
+    { "matches": ["https://fantia.jp/posts/*", "https://fantia.jp/fanclubs/*"], "js": ["content/content-script.js"], "run_at": "document_idle" }
   ],
   "options_page": "options/options.html",
   "action": { "default_title": "fantia-dl" },
