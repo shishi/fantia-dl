@@ -1,13 +1,13 @@
 import { parsePost } from "../fantia/parse";
 import type { EnqueueItem, EnqueueMessage, EnqueueResponse, DownloadResult, PostMeta, ZipPortResult, ZipStartMessage, ZipChunkMessage, ZipEndMessage } from "./messages";
 import { ZIP_PORT_NAME } from "./messages";
-import { zipSync } from "fflate";
-import { loadSettings } from "../core/settings";
+import { loadSettings, DOWNLOAD_CONFLICT_ACTION } from "../core/settings";
 import { renderTemplate, TemplateError } from "../core/template-engine";
 import { bytesToBase64 } from "../core/base64";
-import type { ContentBlock, PostData, RenderContext, Settings } from "../core/types";
+import { validatePath } from "../core/path-validator";
+import type { ContentBlock, FileItem, PostData, RenderContext, Settings } from "../core/types";
 import { fetchPost, resolveUrl, fetchBinary } from "./fantia-api";
-import { validateDownloadUrl } from "../core/url-allowlist";
+import { createSerialQueue, zipAsync, collectZipSources, ZIP_FALLBACK_NOTICE } from "./zip-support";
 
 const postIdFromUrl = () => location.pathname.match(/posts\/(\d+)/)?.[1] ?? null;
 
@@ -34,34 +34,40 @@ function sendZipOverPort(
   });
 }
 
-// photo_gallery を zip にまとめ、background 経由で chrome.downloads.download する。
-// 履歴は持たない(zip は一発勝負。失敗したら再クリックでやり直す)。
-async function makeAndDownloadZip(
-  block: ContentBlock,
-  post: PostData,
-  s: Settings,
-): Promise<{ queued: number; error?: string }> {
-  try {
-    return await makeAndDownloadZipInner(block, post, s);
-  } catch (e) {
-    return { queued: 0, error: e instanceof TemplateError ? `テンプレートエラー: ${e.message}` : String(e) };
-  }
+// --- zip 組み立て(spec 変更 A-4 / B) ---------------------------------------
+// fantia のギャラリーは「zip 排他分岐」で、zip が失敗するとそのギャラリーが丸ごと
+// 未保存になる。enqueue 前のあらゆる zip 失敗(バジェット超過・validatePath 不合格・
+// offscreen 障害・Port 切断・downloads.download 失敗)は ok:false を返し、呼び出し側が
+// 個別ファイル DL へフォールバックする。個別 DL をスキップしてよいのは zip の enqueue が
+// 実際に成功したときだけ(ユーザーの目的は保存であって zip 形式ではない)。
+// enqueue 成功後に blob DL が interrupted になるケースは対象外(復旧は再クリック)。
+type GalleryZipResult = { ok: true } | { ok: false; reason: string };
+
+// ページ内の zip 組み立ては同時 1 件に直列化(round21)。per-document 状態のため
+// リロード/遷移でキューは消えるが、復旧は再クリックで良い(round26 residual 受容済み)。
+const enqueueZipJob = createSerialQueue();
+
+function tryZipGallery(block: ContentBlock, post: PostData, s: Settings): Promise<GalleryZipResult> {
+  return enqueueZipJob(() => tryZipGalleryInner(block, post, s))
+    .catch((e) => ({ ok: false as const, reason: String(e) }));
 }
 
-async function makeAndDownloadZipInner(
-  block: ContentBlock,
-  post: PostData,
-  s: Settings,
-): Promise<{ queued: number; error?: string }> {
+async function tryZipGalleryInner(block: ContentBlock, post: PostData, s: Settings): Promise<GalleryZipResult> {
+  const files = block.files.filter((f): f is FileItem & { directUrl: string } => !!f.directUrl);
+  if (files.length === 0) return { ok: false, reason: "directUrl のある photo がありません" };
+
+  // ソース収集: 各 URL の allowlist 検証(適用点 b)・件数上限・残バジェットの
+  // maxBytes 伝搬は collectZipSources(単体テスト対象)が行う。
+  const collected = await collectZipSources(files.map((f) => f.directUrl), (url, opts) => fetchBinary(url, opts));
+  if (!collected.ok) return { ok: false, reason: collected.reason };
+
   const entries: Record<string, Uint8Array> = {};
   const usedNames = new Set<string>();
   const now = new Date();
-  for (const f of block.files) {
-    if (!f.directUrl) continue;
-    const uv = validateDownloadUrl(f.directUrl);
-    if (!uv.ok) return { queued: 0, error: uv.error };
-    const res = await fetchBinary(f.directUrl);
-    if (!res.ok) return { queued: 0, error: `fetchBinary failed: ${res.error}` };
+  for (const f of files) {
+    const buf = collected.buffers.get(f.directUrl);
+    if (!buf) return { ok: false, reason: `zip ソース欠落: ${f.directUrl}` };
+
     const ctx: RenderContext = {
       creator: post.creator, creatorId: post.creatorId,
       postTitle: post.postTitle, postId: post.postId,
@@ -70,8 +76,13 @@ async function makeAndDownloadZipInner(
       contentType: f.contentType, plan: block.plan ?? "",
       filename: f.filename ?? "", ext: f.ext, seq: f.seq, total: f.total,
     };
-    let entryPath = renderTemplate(s.zipEntryTemplate, ctx,
-      { replacement: s.illegalCharReplacement, segmentMaxLen: s.segmentMaxLen });
+    let entryPath: string;
+    try {
+      entryPath = renderTemplate(s.zipEntryTemplate, ctx,
+        { replacement: s.illegalCharReplacement, segmentMaxLen: s.segmentMaxLen });
+    } catch (e) {
+      return { ok: false, reason: e instanceof TemplateError ? `テンプレートエラー: ${e.message}` : String(e) };
+    }
     // テンプレが $seq を含まない等で衝突しうる -> 静かな上書き(データ消失)を防ぐため連番を付与。
     if (usedNames.has(entryPath)) {
       const dot = entryPath.lastIndexOf(".");
@@ -82,12 +93,16 @@ async function makeAndDownloadZipInner(
       while (usedNames.has(candidate)) { n++; candidate = `${stem} (${n})${ext}`; }
       entryPath = candidate;
     }
+    // entry 名はアーカイブ内部の名前で uniquify サフィックスが付かないため、
+    // headroom 減算を無効("overwrite" 相当)にして検証する(spec round5:
+    // uniquify 扱いだと正当な entry 名が誤って拒否され zip 全体が不当に中断される)。
+    const pv = validatePath(entryPath, { fullPathMaxLen: s.fullPathMaxLen, uniquifyHeadroom: s.uniquifyHeadroom, conflictAction: "overwrite", segmentMaxLen: s.segmentMaxLen });
+    if (!pv.ok) return { ok: false, reason: `zip entry 名不正: ${entryPath}: ${pv.error}` };
     usedNames.add(entryPath);
-    entries[entryPath] = new Uint8Array(res.buffer);
+    entries[entryPath] = buf;
   }
-  const zipped = zipSync(entries);
 
-  const firstFile = block.files[0];
+  const firstFile = files[0];
   const zipCtx: RenderContext = {
     creator: post.creator, creatorId: post.creatorId,
     postTitle: post.postTitle, postId: post.postId,
@@ -97,12 +112,27 @@ async function makeAndDownloadZipInner(
     filename: firstFile?.filename ?? "", ext: "zip",
     seq: 1, total: 1,
   };
-  const zipPath = renderTemplate(s.zipPathTemplate, zipCtx,
-    { replacement: s.illegalCharReplacement, segmentMaxLen: s.segmentMaxLen });
+  let zipPath: string;
+  try {
+    zipPath = renderTemplate(s.zipPathTemplate, zipCtx,
+      { replacement: s.illegalCharReplacement, segmentMaxLen: s.segmentMaxLen });
+  } catch (e) {
+    return { ok: false, reason: e instanceof TemplateError ? `テンプレートエラー: ${e.message}` : String(e) };
+  }
+  // zipPath は実際に chrome.downloads.download を通るため uniquify 前提
+  // (headroom 減算あり)で検証する(spec round4/5: 通常 DL とガード水準を揃える)。
+  const zv = validatePath(zipPath, { fullPathMaxLen: s.fullPathMaxLen, uniquifyHeadroom: s.uniquifyHeadroom, conflictAction: DOWNLOAD_CONFLICT_ACTION, segmentMaxLen: s.segmentMaxLen });
+  if (!zv.ok) return { ok: false, reason: `zip ファイル名不正: ${zipPath}: ${zv.error}` };
 
-  // content-script は chrome.downloads にアクセスできない(拡張ページ/SW 限定)ため、
-  // zip バイト列を background に渡して Blob 化 + downloads.download させる。
-  return sendZipOverPort(zipPath, zipped);
+  let zipped: Uint8Array;
+  try {
+    zipped = await zipAsync(entries);
+  } catch (e) {
+    return { ok: false, reason: `zip 圧縮失敗: ${String(e)}` };
+  }
+  const r = await sendZipOverPort(zipPath, zipped);
+  if (r.queued !== 1) return { ok: false, reason: r.error ?? "zip の enqueue に失敗" };
+  return { ok: true };
 }
 
 async function runDownload(): Promise<DownloadResult | null> {
@@ -123,9 +153,11 @@ async function runDownload(): Promise<DownloadResult | null> {
   const notices: string[] = []; // zip フォールバック通知用(Task 7 で使用開始)
   for (const c of post.contents) {
     if (c.contentType === "photo" && c.files.length >= 2 && s.zipGalleries && s.contentTypes.photo) {
-      const r = await makeAndDownloadZip(c, post, s);
-      if (r.error) errors.push(r.error); else zipQueued += r.queued;
-      continue;
+      const zr = await tryZipGallery(c, post, s);
+      if (zr.ok) { zipQueued += 1; continue; }
+      // enqueue 前の zip 失敗 → このギャラリーを個別ファイル DL へフォールバック
+      // (下の通常ループに落とす)。通知は notices(情報)チャネルで表示する。
+      notices.push(`${ZIP_FALLBACK_NOTICE}(${zr.reason})`);
     }
     for (const f of c.files) {
       let url = f.directUrl ?? "";
