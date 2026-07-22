@@ -28,9 +28,46 @@ export function createSerialQueue(): <T>(job: () => Promise<T>) => Promise<T> {
 
 // zipSync(メインスレッド同期圧縮)の代わりに fflate の非同期 zip()(worker ベース)を
 // 使い、圧縮中もページの操作性を保つ(round21)。
-export function zipAsync(entries: Record<string, Uint8Array>): Promise<Uint8Array> {
+//
+// fix: zip hang guard — fflate 内部の Worker ヘルパー wk() は w.onmessage のみ購読し
+// w.onerror を購読していない。Worker コンストラクタの同期 throw は zip() 側で
+// reject に変換されるため既存の try/catch で個別 DL フォールバックに落ちるが、
+// Worker 生成後の非同期失敗(CSP 違反の非同期エラー、OOM、その他)は受け皿がなく
+// コールバックが二度と呼ばれない = Promise が永久 pending になり得る。
+// createSerialQueue でタブ内 zip を直列化しているため、1 件でも pending のまま
+// 固まると以後の全 zip ジョブが恒久ハングする(ページリロードでしか復旧しない)。
+// タイムアウトガードで必ず reject させ、呼び出し側の個別 DL フォールバック +
+// ZIP_FALLBACK_NOTICE に落とす。タイムアウト値の根拠は
+// .superpowers/sdd/task-7-report.md の "Fix: zip hang guard" セクション参照。
+export const ZIP_ASYNC_TIMEOUT_MS = 90 * 1000;
+
+// fflate の zip() と同じコールバック形状。テスト用に差し替え可能にする
+// (実運用は fflate の zip をデフォルト採用)。
+type ZipImpl = (
+  data: Record<string, Uint8Array>,
+  opts: Record<string, unknown>,
+  cb: (err: Error | null, data: Uint8Array) => void,
+) => void;
+
+export function zipAsync(
+  entries: Record<string, Uint8Array>,
+  opts: { timeoutMs?: number; zipImpl?: ZipImpl } = {},
+): Promise<Uint8Array> {
+  const timeoutMs = opts.timeoutMs ?? ZIP_ASYNC_TIMEOUT_MS;
+  const zipFn: ZipImpl = opts.zipImpl ?? zip;
   return new Promise((resolve, reject) => {
-    zip(entries, {}, (err, data) => (err ? reject(err) : resolve(data)));
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error(`zipAsync: ${timeoutMs}ms 経過しても worker から応答がないためタイムアウトしました`));
+    }, timeoutMs);
+    zipFn(entries, {}, (err, data) => {
+      if (settled) return; // タイムアウト側で既に確定済み。二重 settle を防ぐ
+      settled = true;
+      clearTimeout(timer);
+      err ? reject(err) : resolve(data);
+    });
   });
 }
 

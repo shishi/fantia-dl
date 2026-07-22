@@ -26,6 +26,29 @@ describe("zipAsync(fflate 非同期 zip)", () => {
     expect(new TextDecoder().decode(un["a.txt"])).toBe("hello");
     expect(new TextDecoder().decode(un["dir/b.txt"])).toBe("world");
   });
+
+  // fflate の wk() は Worker の onmessage のみ購読し onerror を購読しないため、
+  // Worker 生成後の非同期失敗ではコールバックが二度と呼ばれず Promise が
+  // 永久 pending になり得る(createSerialQueue 経由でタブ全体の恒久ハングに繋がる)。
+  // タイムアウトガードでこれを防ぐ。
+  it("resolve も reject もしない zip 実装が注入されたときはタイムアウトで reject する", async () => {
+    vi.useFakeTimers();
+    try {
+      const neverCallingZipImpl = (
+        _data: Record<string, Uint8Array>,
+        _opts: Record<string, unknown>,
+        _cb: (err: Error | null, data: Uint8Array) => void,
+      ): void => {
+        // 意図的に cb を一度も呼ばない(非同期 Worker 失敗を模す)
+      };
+      const p = zipAsync({ "a.txt": new Uint8Array([1]) }, { timeoutMs: 1000, zipImpl: neverCallingZipImpl });
+      const assertion = expect(p).rejects.toThrow();
+      await vi.advanceTimersByTimeAsync(1000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("collectZipSources(zip ソース収集: allowlist 適用点 b + バジェット)", () => {
