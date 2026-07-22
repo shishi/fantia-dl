@@ -45,7 +45,6 @@ const ZIP_CHUNK_BYTES = 4 * 1024 * 1024; // 1 メッセージ上限を避ける�
 // (1 メッセージで送ると runtime messaging のサイズ上限に引っかかるため)。
 function sendZipOverPort(
   filename: string,
-  conflictAction: "uniquify" | "overwrite",
   bytes: Uint8Array,
 ): Promise<ZipPortResult> {
   return new Promise((resolve) => {
@@ -54,7 +53,7 @@ function sendZipOverPort(
     const port = chrome.runtime.connect({ name: ZIP_PORT_NAME });
     port.onMessage.addListener((res: ZipPortResult) => { finish(res); port.disconnect(); });
     port.onDisconnect.addListener(() => finish({ queued: 0, error: "background との接続が切れました" }));
-    port.postMessage({ kind: "start", filename, conflictAction, totalBytes: bytes.byteLength } as ZipStartMessage);
+    port.postMessage({ kind: "start", filename, totalBytes: bytes.byteLength } as ZipStartMessage);
     for (let off = 0; off < bytes.byteLength; off += ZIP_CHUNK_BYTES) {
       const slice = bytes.subarray(off, Math.min(off + ZIP_CHUNK_BYTES, bytes.byteLength));
       port.postMessage({ kind: "chunk", data: bytesToBase64(slice) } as ZipChunkMessage);
@@ -130,7 +129,7 @@ async function makeAndDownloadZipInner(
 
   // content-script は chrome.downloads にアクセスできない(拡張ページ/SW 限定)ため、
   // zip バイト列を background に渡して Blob 化 + downloads.download させる。
-  return sendZipOverPort(zipPath, s.conflictAction, zipped);
+  return sendZipOverPort(zipPath, zipped);
 }
 
 async function runDownload(force: boolean): Promise<{ queued?: number; error?: string } | null> {

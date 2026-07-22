@@ -1,4 +1,4 @@
-import { loadSettings } from "../core/settings";
+import { loadSettings, DOWNLOAD_CONFLICT_ACTION } from "../core/settings";
 import { renderTemplate, TemplateError } from "../core/template-engine";
 import { validatePath } from "../core/path-validator";
 import type { RenderContext, Settings } from "../core/types";
@@ -43,7 +43,7 @@ async function handleEnqueue(msg: EnqueueMessage): Promise<{ queued: number; err
       errors.push(e instanceof TemplateError ? `テンプレートエラー: ${e.message}` : String(e));
       break; // テンプレ不正は全体中断
     }
-    const v = validatePath(relPath, { fullPathMaxLen: s.fullPathMaxLen, uniquifyHeadroom: s.uniquifyHeadroom, conflictAction: s.conflictAction, segmentMaxLen: s.segmentMaxLen });
+    const v = validatePath(relPath, { fullPathMaxLen: s.fullPathMaxLen, uniquifyHeadroom: s.uniquifyHeadroom, conflictAction: DOWNLOAD_CONFLICT_ACTION, segmentMaxLen: s.segmentMaxLen });
     if (!v.ok) { errors.push(`${relPath}: ${v.error}`); continue; }
     if (seenPaths.has(relPath)) { errors.push(`バッチ内パス重複: ${relPath}`); continue; }
     seenPaths.add(relPath);
@@ -63,7 +63,7 @@ async function handleEnqueue(msg: EnqueueMessage): Promise<{ queued: number; err
 
 async function startDownload(j: JobRecord, s: Settings): Promise<void> {
   try {
-    const downloadId = await chrome.downloads.download({ url: j.url, filename: j.relPath, saveAs: false, conflictAction: s.conflictAction });
+    const downloadId = await chrome.downloads.download({ url: j.url, filename: j.relPath, saveAs: false, conflictAction: DOWNLOAD_CONFLICT_ACTION });
     await updateJob(j.idemKey, { state: "requested", downloadId });
   } catch (e) {
     await updateJob(j.idemKey, { state: "error", error: String(e) });
@@ -131,7 +131,7 @@ function sendChunkToOffscreen(jobId: string, base64: string): Promise<unknown> {
   } satisfies OffscreenChunkMessage);
 }
 
-async function finishZipDownload(jobId: string, filename: string, conflictAction: "uniquify" | "overwrite"): Promise<ZipPortResult> {
+async function finishZipDownload(jobId: string, filename: string): Promise<ZipPortResult> {
   const res = (await chrome.runtime.sendMessage({
     target: OFFSCREEN_TARGET, kind: "zipDone", jobId, mimeType: "application/zip",
   } satisfies OffscreenDoneMessage)) as OffscreenResult | undefined;
@@ -142,7 +142,7 @@ async function finishZipDownload(jobId: string, filename: string, conflictAction
 
   const blobUrl = res.url;
   try {
-    const downloadId = await chrome.downloads.download({ url: blobUrl, filename, saveAs: false, conflictAction });
+    const downloadId = await chrome.downloads.download({ url: blobUrl, filename, saveAs: false, conflictAction: DOWNLOAD_CONFLICT_ACTION });
     zipDownloads.set(downloadId, blobUrl);
     await persistZipDownloads();
     return { queued: 1 };
@@ -168,7 +168,6 @@ function discardOffscreenJob(jobId: string): Promise<unknown> {
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== ZIP_PORT_NAME) return;
   let filename = "";
-  let conflictAction: "uniquify" | "overwrite" = "uniquify";
   const jobId = crypto.randomUUID();
   // Port 上のメッセージ順序は保証されるが、各メッセージを chrome.runtime.sendMessage で
   // offscreen へ転送する処理は非同期なので、そのまま fire-and-forget すると転送順序が
@@ -179,14 +178,13 @@ chrome.runtime.onConnect.addListener((port) => {
   port.onMessage.addListener((msg: ZipPortMessage) => {
     if (msg.kind === "start") {
       filename = msg.filename;
-      conflictAction = msg.conflictAction;
       chain = ensureOffscreenDocument();
     } else if (msg.kind === "chunk") {
       chain = chain.then(() => sendChunkToOffscreen(jobId, msg.data));
     } else if (msg.kind === "end") {
       ended = true;
       chain
-        .then(() => finishZipDownload(jobId, filename, conflictAction))
+        .then(() => finishZipDownload(jobId, filename))
         .then((res) => { try { port.postMessage(res); } catch {} })
         .catch((e) => { try { port.postMessage({ queued: 0, error: String(e) } as ZipPortResult); } catch {} });
     }

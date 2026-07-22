@@ -1,4 +1,4 @@
-import { sanitizeSegment } from "../src/core/sanitizer";
+import { sanitizeSegment, isSafeReplacement } from "../src/core/sanitizer";
 const O = { replacement: "_", maxLen: 200 };
 
 describe("sanitizeSegment", () => {
@@ -33,5 +33,18 @@ describe("sanitizeSegment", () => {
     const r = sanitizeSegment("a".repeat(300) + ".png", { ...O, maxLen: 10, preserveExt: true });
     expect(r.endsWith(".png")).toBe(true);
     expect([...r].length).toBe(10);
+  });
+});
+
+describe("isSafeReplacement(illegalCharReplacement として安全か)", () => {
+  it("通常の置換文字と空文字は safe", () => {
+    expect(isSafeReplacement("_")).toBe(true);
+    expect(isSafeReplacement("-")).toBe(true);
+    expect(isSafeReplacement("")).toBe(true);
+  });
+  it("パス区切り・Windows 禁止文字・制御文字は unsafe", () => {
+    for (const c of ["/", "\\", ":", "*", "?", '"', "<", ">", "|", "\x00", "\x1f", "\x7f", "a/b"]) {
+      expect(isSafeReplacement(c)).toBe(false);
+    }
   });
 });

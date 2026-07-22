@@ -33,3 +33,11 @@ export function sanitizeSegment(
   if (RESERVED.test(s)) s = s + "_";
   return s;
 }
+
+// illegalCharReplacement として安全な文字列か(spec 変更 C: replacement 自体のガード)。
+// / や \ を許すと sanitizeSegment の置換「後」にパス区切りが新生して中和が無効化され、
+// ILLEGAL 相当・制御文字を許すと置換結果自体が不正ファイル名になる。
+const UNSAFE_REPLACEMENT = /[\/\\:*?"<>|\x00-\x1f\x7f]/;
+export function isSafeReplacement(rep: string): boolean {
+  return !UNSAFE_REPLACEMENT.test(rep);
+}

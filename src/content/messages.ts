@@ -47,10 +47,12 @@ export interface ClearHistoryMessage {
 // start -> chunk* -> end のチャンク転送にする(ポート内メッセージ順序は保証される)。
 export const ZIP_PORT_NAME = "zipDownload";
 
+// zip は Port 経由で conflictAction を独自に運ばない(spec 変更 A-4 round3:
+// フィールドが残ると settings から消しても overwrite が表現可能なままになる)。
+// SW 側は DOWNLOAD_CONFLICT_ACTION 定数を直接使う。
 export interface ZipStartMessage {
   kind: "start";
   filename: string;
-  conflictAction: "uniquify" | "overwrite";
   totalBytes: number;
 }
 export interface ZipChunkMessage {

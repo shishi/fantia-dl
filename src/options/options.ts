@@ -1,7 +1,6 @@
 // src/options/options.ts
-import { loadSettings, saveSettings } from "../core/settings";
-import { renderTemplate, TemplateError } from "../core/template-engine";
-import { validatePath } from "../core/path-validator";
+import { loadSettings, saveSettings, DOWNLOAD_CONFLICT_ACTION } from "../core/settings";
+import { checkTemplate, hasBlockingTemplateError, illegalReplacementError, type TemplateCheckInput } from "./validate-templates";
 import type { RenderContext, Settings } from "../core/types";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -22,30 +21,30 @@ const zipEntrySample: RenderContext = { ...singleSample };
 
 let cur: Settings;
 
-function renderPreview(tpl: string, ctx: RenderContext, previewEl: string, errEl: string) {
-  try {
-    const rel = renderTemplate(tpl, ctx, {
-      replacement: ($("repl") as HTMLInputElement).value || "_",
-      segmentMaxLen: cur.segmentMaxLen,
-    });
-    const v = validatePath(rel, {
-      fullPathMaxLen: cur.fullPathMaxLen,
-      uniquifyHeadroom: cur.uniquifyHeadroom,
-      conflictAction: (($("conflict") as HTMLSelectElement).value as any),
-      segmentMaxLen: cur.segmentMaxLen,
-    });
-    $(previewEl).textContent = rel;
-    $(errEl).textContent = v.ok ? "" : `検証エラー: ${v.error}`;
-  } catch (e) {
-    $(previewEl).textContent = "";
-    $(errEl).textContent = e instanceof TemplateError ? `テンプレートエラー: ${e.message}` : String(e);
-  }
+// 検証モードは実行時と常に同じにする(spec 変更 A-4 round6):
+// pathTemplate / zipPathTemplate は downloads.download を通る → uniquify(headroom 減算あり)。
+// zipEntryTemplate はアーカイブ内部名 → overwrite 相当(headroom 無効)。
+function templateInput(tpl: string, ctx: RenderContext, conflictAction: "uniquify" | "overwrite"): TemplateCheckInput {
+  return {
+    tpl, ctx,
+    replacement: ($("repl") as HTMLInputElement).value || "_",
+    segmentMaxLen: cur.segmentMaxLen,
+    fullPathMaxLen: cur.fullPathMaxLen,
+    uniquifyHeadroom: cur.uniquifyHeadroom,
+    conflictAction,
+  };
 }
 
-function updateAllPreviews() {
-  renderPreview(($("tpl") as HTMLInputElement).value, singleSample, "preview", "tplErr");
-  renderPreview(($("zip_path_tpl") as HTMLInputElement).value, zipPathSample, "zip_path_preview", "zipPathErr");
-  renderPreview(($("zip_entry_tpl") as HTMLInputElement).value, zipEntrySample, "zip_entry_preview", "zipEntryErr");
+function renderPreview(input: TemplateCheckInput, previewEl: string, errEl: string): void {
+  const { rel, error } = checkTemplate(input);
+  $(previewEl).textContent = rel;
+  $(errEl).textContent = error;
+}
+
+function updateAllPreviews(): void {
+  renderPreview(templateInput(($("tpl") as HTMLInputElement).value, singleSample, DOWNLOAD_CONFLICT_ACTION), "preview", "tplErr");
+  renderPreview(templateInput(($("zip_path_tpl") as HTMLInputElement).value, zipPathSample, DOWNLOAD_CONFLICT_ACTION), "zip_path_preview", "zipPathErr");
+  renderPreview(templateInput(($("zip_entry_tpl") as HTMLInputElement).value, zipEntrySample, "overwrite"), "zip_entry_preview", "zipEntryErr");
 }
 
 async function init() {
@@ -54,31 +53,52 @@ async function init() {
   ($("zip_path_tpl") as HTMLInputElement).value = cur.zipPathTemplate;
   ($("zip_entry_tpl") as HTMLInputElement).value = cur.zipEntryTemplate;
   ($("repl") as HTMLInputElement).value = cur.illegalCharReplacement;
-  ($("conflict") as HTMLSelectElement).value = cur.conflictAction;
   ($("ct_photo") as HTMLInputElement).checked = cur.contentTypes.photo;
   ($("ct_file") as HTMLInputElement).checked = cur.contentTypes.file;
   ($("ct_video") as HTMLInputElement).checked = cur.contentTypes.video;
   ($("zip_galleries") as HTMLInputElement).checked = cur.zipGalleries;
 
-  ["tpl", "zip_path_tpl", "zip_entry_tpl", "repl", "conflict"].forEach((id) =>
+  ["tpl", "zip_path_tpl", "zip_entry_tpl", "repl"].forEach((id) =>
     $(id).addEventListener("input", updateAllPreviews),
   );
   updateAllPreviews();
 
   $("save").addEventListener("click", async () => {
+    // クリック時点で再計算した結果で保存可否を判定する(古い DOM の textContent は見ない)
+    updateAllPreviews();
+    const zipModeActive = ($("zip_galleries") as HTMLInputElement).checked && ($("ct_photo") as HTMLInputElement).checked;
+    const blocking = hasBlockingTemplateError(
+      templateInput(($("tpl") as HTMLInputElement).value, singleSample, DOWNLOAD_CONFLICT_ACTION),
+      {
+        zipModeActive,
+        zipPath: templateInput(($("zip_path_tpl") as HTMLInputElement).value, zipPathSample, DOWNLOAD_CONFLICT_ACTION),
+        zipEntry: templateInput(($("zip_entry_tpl") as HTMLInputElement).value, zipEntrySample, "overwrite"),
+      },
+    );
+    if (blocking) {
+      alert("テンプレートにエラーがあります。修正してください");
+      return;
+    }
+    const replError = illegalReplacementError(($("repl") as HTMLInputElement).value);
+    if (replError) {
+      alert(replError);
+      return;
+    }
+    // 既知キーのみ明示的に書き戻す(blind spread の廃止。spec 変更 A-3 round2)
     cur = {
-      ...cur,
       pathTemplate: ($("tpl") as HTMLInputElement).value,
       zipPathTemplate: ($("zip_path_tpl") as HTMLInputElement).value,
       zipEntryTemplate: ($("zip_entry_tpl") as HTMLInputElement).value,
       illegalCharReplacement: ($("repl") as HTMLInputElement).value || "_",
-      conflictAction: ($("conflict") as HTMLSelectElement).value as any,
       contentTypes: {
         photo: ($("ct_photo") as HTMLInputElement).checked,
         file: ($("ct_file") as HTMLInputElement).checked,
         video: ($("ct_video") as HTMLInputElement).checked,
       },
       zipGalleries: ($("zip_galleries") as HTMLInputElement).checked,
+      segmentMaxLen: cur.segmentMaxLen,
+      fullPathMaxLen: cur.fullPathMaxLen,
+      uniquifyHeadroom: cur.uniquifyHeadroom,
     };
     await saveSettings(cur);
     $("saved").textContent = "保存しました";
