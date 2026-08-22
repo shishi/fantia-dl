@@ -1,5 +1,6 @@
 import { loadSettings, DOWNLOAD_CONFLICT_ACTION } from "../core/settings";
 import { planEnqueue } from "./enqueue-plan";
+import { filenameGuard } from "./filename-guard";
 import type { EnqueueMessage, EnqueueResponse, ZipPortMessage, ZipPortResult } from "../content/messages";
 import { ZIP_PORT_NAME } from "../content/messages";
 import { OFFSCREEN_TARGET } from "../offscreen/protocol";
@@ -21,7 +22,12 @@ async function handleEnqueue(msg: EnqueueMessage): Promise<EnqueueResponse> {
   let queued = 0;
   for (const d of downloads) {
     try {
-      await chrome.downloads.download({ url: d.url, filename: d.relPath, saveAs: false, conflictAction: DOWNLOAD_CONFLICT_ACTION });
+      // 横取り対策: download({filename}) の filename は「提案」でしかなく、
+      // downloads.onDeterminingFilename を登録した拡張がブラウザに居ると捨てられて
+      // 生ファイル名で保存される。同イベントで名前を言い直せるよう、発行前にこの URL の
+      // テンプレ名を claim する(効き方の前提は filename-guard.ts の冒頭コメントを見ること)。
+      await filenameGuard.claimAndDownload(d.url, d.relPath, () =>
+        chrome.downloads.download({ url: d.url, filename: d.relPath, saveAs: false, conflictAction: DOWNLOAD_CONFLICT_ACTION }));
       queued++;
     } catch (e) {
       errors.push(`${d.relPath}: ${String(e)}`);
@@ -101,7 +107,10 @@ async function finishZipDownload(jobId: string, filename: string): Promise<ZipPo
 
   const blobUrl = res.url;
   try {
-    const downloadId = await chrome.downloads.download({ url: blobUrl, filename, saveAs: false, conflictAction: DOWNLOAD_CONFLICT_ACTION });
+    // 通常 DL と同じく、blob DL も onDeterminingFilename の横取り対象になる
+    // (登録済みの他拡張が居ると zip のテンプレ名が捨てられる)。
+    const downloadId = await filenameGuard.claimAndDownload(blobUrl, filename, () =>
+      chrome.downloads.download({ url: blobUrl, filename, saveAs: false, conflictAction: DOWNLOAD_CONFLICT_ACTION }));
     zipDownloads.set(downloadId, blobUrl);
     await persistZipDownloads();
     return { queued: 1 };
@@ -165,6 +174,19 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
   return false;
+});
+
+// 横取り対策: download({filename}) の filename は提案でしかなく、
+// downloads.onDeterminingFilename を登録した拡張が居ると捨てられる。ここで
+// 自分の DL のテンプレ名を言い直す(効き方の前提と、効かないときに疑う先は
+// filename-guard.ts の冒頭コメントに書いてある)。
+// MV3 なのでトップレベルで同期的に登録する(遅延登録だと SW が寝ている間の
+// イベントでこの SW が起こされず、他拡張の決定がそのまま通る)。
+// suggest() を呼ぶのは claim 済み URL = 自分が発行した DL だけ。それ以外は
+// 何も返さず他拡張の決定に干渉しない(戻り値 true は「suggest を非同期で呼ぶ」
+// の意味なので、同期 suggest のここでは返さない)。
+chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
+  filenameGuard.handleDeterminingFilename(item, suggest);
 });
 
 chrome.downloads.onChanged.addListener(async (delta) => {
