@@ -6,6 +6,28 @@ function mkSuggest() {
   return { calls, suggest: (o: any) => { calls.push(o); } };
 }
 
+function mkDeterminingFilenameEvent() {
+  type Listener = (
+    item: { url?: string },
+    suggest: (o: { filename: string; conflictAction: string }) => void,
+  ) => void;
+  const listeners = new Set<Listener>();
+  return {
+    event: {
+      addListener: (listener: Listener) => { listeners.add(listener); },
+      removeListener: (listener: Listener) => { listeners.delete(listener); },
+    },
+    listenerCount: () => listeners.size,
+    dispatch(item: { url?: string }) {
+      const suggestions: Array<{ filename: string; conflictAction: string }> = [];
+      for (const listener of [...listeners]) {
+        listener(item, (suggestion) => { suggestions.push(suggestion); });
+      }
+      return suggestions;
+    },
+  };
+}
+
 const U = "https://cc.fantia.jp/uploads/post_content_photo/file/1/a.jpg";
 
 describe("filename guard (downloads.onDeterminingFilename の横取り対策)", () => {
@@ -90,5 +112,22 @@ describe("filename guard (downloads.onDeterminingFilename の横取り対策)", 
     const s2 = mkSuggest();
     expect(g2.handleDeterminingFilename({ url: raw }, s2.suggest)).toBe(true);
     expect(s2.calls[0].filename).toBe("B.zip");
+  });
+
+  it("姉妹拡張との競合回避: claim がある guard だけ listener を登録し、消費後は解除する", async () => {
+    const event = mkDeterminingFilenameEvent();
+    const owner = createFilenameGuard();
+    const sibling = createFilenameGuard();
+    owner.bindDeterminingFilenameEvent(event.event);
+    sibling.bindDeterminingFilenameEvent(event.event);
+
+    expect(event.listenerCount()).toBe(0);
+    await owner.claimAndDownload(U, "owner.jpg", async () => 1);
+    expect(event.listenerCount()).toBe(1);
+
+    expect(event.dispatch({ url: U })).toEqual([
+      { filename: "owner.jpg", conflictAction: "uniquify" },
+    ]);
+    expect(event.listenerCount()).toBe(0);
   });
 });
