@@ -1,6 +1,8 @@
 import { unzipSync } from "fflate";
 import { createSerialQueue, zipAsync, collectZipSources, ZIP_SOURCE_BUDGET_BYTES, ZIP_MAX_FILES, ZIP_FALLBACK_NOTICE, type BinaryFetch } from "../src/content/zip-support";
 
+vi.mock("fflate", () => vi.importActual("fflate/browser"));
+
 describe("createSerialQueue(ページ内 zip 組み立ての直列化)", () => {
   it("ジョブを投入順に直列実行する(並走しない)", async () => {
     const q = createSerialQueue();
@@ -27,10 +29,28 @@ describe("zipAsync(fflate 非同期 zip)", () => {
     expect(new TextDecoder().decode(un["dir/b.txt"])).toBe("world");
   });
 
-  // fflate の wk() は Worker の onmessage のみ購読し onerror を購読しないため、
-  // Worker 生成後の非同期失敗ではコールバックが二度と呼ばれず Promise が
-  // 永久 pending になり得る(createSerialQueue 経由でタブ全体の恒久ハングに繋がる)。
-  // タイムアウトガードでこれを防ぐ。
+  it("Worker が禁止されたページでも大きなギャラリー画像を ZIP にまとめる", async () => {
+    const worker = vi.fn(function () {
+      throw new DOMException("Worker blocked by Content Security Policy", "SecurityError");
+    });
+    vi.stubGlobal("Worker", worker);
+    try {
+      const entries = {
+        "001.jpg": new Uint8Array(160_001).fill(137),
+        "002.jpg": new Uint8Array([255, 216, 255]),
+      };
+      const data = await zipAsync(entries);
+      const un = unzipSync(data);
+      expect(Object.keys(un)).toEqual(Object.keys(entries));
+      expect(un["001.jpg"]).toEqual(entries["001.jpg"]);
+      expect(un["002.jpg"]).toEqual(entries["002.jpg"]);
+      expect(worker).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  // コールバックが返らない場合も、直列キューの後続ジョブを止め続けない。
   it("resolve も reject もしない zip 実装が注入されたときはタイムアウトで reject する", async () => {
     vi.useFakeTimers();
     try {
@@ -39,7 +59,7 @@ describe("zipAsync(fflate 非同期 zip)", () => {
         _opts: Record<string, unknown>,
         _cb: (err: Error | null, data: Uint8Array) => void,
       ): void => {
-        // 意図的に cb を一度も呼ばない(非同期 Worker 失敗を模す)
+        // 意図的に cb を一度も呼ばない
       };
       const p = zipAsync({ "a.txt": new Uint8Array([1]) }, { timeoutMs: 1000, zipImpl: neverCallingZipImpl });
       const assertion = expect(p).rejects.toThrow();

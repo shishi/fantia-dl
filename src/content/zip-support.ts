@@ -26,19 +26,9 @@ export function createSerialQueue(): <T>(job: () => Promise<T>) => Promise<T> {
   };
 }
 
-// zipSync(メインスレッド同期圧縮)の代わりに fflate の非同期 zip()(worker ベース)を
-// 使い、圧縮中もページの操作性を保つ(round21)。
-//
-// fix: zip hang guard — fflate 内部の Worker ヘルパー wk() は w.onmessage のみ購読し
-// w.onerror を購読していない。Worker コンストラクタの同期 throw は zip() 側で
-// reject に変換されるため既存の try/catch で個別 DL フォールバックに落ちるが、
-// Worker 生成後の非同期失敗(CSP 違反の非同期エラー、OOM、その他)は受け皿がなく
-// コールバックが二度と呼ばれない = Promise が永久 pending になり得る。
-// createSerialQueue でタブ内 zip を直列化しているため、1 件でも pending のまま
-// 固まると以後の全 zip ジョブが恒久ハングする(ページリロードでしか復旧しない)。
-// タイムアウトガードで必ず reject させ、呼び出し側の個別 DL フォールバック +
-// ZIP_FALLBACK_NOTICE に落とす。タイムアウト値の根拠は
-// .superpowers/sdd/task-7-report.md の "Fix: zip hang guard" セクション参照。
+// 画像は無圧縮で ZIP に格納する。既定圧縮が生成する Blob Worker はページの
+// Content Security Policy で拒否されることがあるため、level: 0 で生成を避ける。
+// コールバック待機は最大 90 秒に制限し、直列キューの後続を止め続けない。
 export const ZIP_ASYNC_TIMEOUT_MS = 90 * 1000;
 
 // fflate の zip() と同じコールバック形状。テスト用に差し替え可能にする
@@ -60,9 +50,9 @@ export function zipAsync(
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
-      reject(new Error(`zipAsync: ${timeoutMs}ms 経過しても worker から応答がないためタイムアウトしました`));
+      reject(new Error(`zipAsync: ${timeoutMs}ms 経過しても ZIP 作成が完了しないためタイムアウトしました`));
     }, timeoutMs);
-    zipFn(entries, {}, (err, data) => {
+    zipFn(entries, { level: 0 }, (err, data) => {
       if (settled) return; // タイムアウト側で既に確定済み。二重 settle を防ぐ
       settled = true;
       clearTimeout(timer);
