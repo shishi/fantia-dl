@@ -19,7 +19,7 @@ describe("planEnqueue(SW enqueue の純粋部分: render→validate→dedup)", (
     expect(r.errors).toEqual([]);
     expect(r.downloads).toHaveLength(1);
     expect(r.downloads[0].url).toBe("https://c.fantia.jp/a.png");
-    expect(r.downloads[0].relPath).toContain("fantia/c/");
+    expect(r.downloads[0].relPath).toBe("c/20260115 t g img.png");
   });
   it("無効化された contentType はスキップ(エラーにもしない)", () => {
     const s = { ...DEFAULT_SETTINGS, contentTypes: { ...DEFAULT_SETTINGS.contentTypes, photo: false } };

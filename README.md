@@ -54,7 +54,7 @@ Chrome 設定「ダウンロード前に各ファイルの保存場所を確認�
 
 ## テンプレート
 `$creator $creatorId $postTitle $postId $date{YYYYMMDD} $today{} $contentTitle $contentId $contentType $plan $filename $ext $seq $seq{3} $total` とオプショナルグループ `[ ... ]`(中の placeholder が空なら丸ごと消える)。
-例: `fantia/$creator/$date{YYYYMMDD}_$postTitle/$contentTitle/[$seq{3}_]$filename.$ext`
+例: `$creator/$date{YYYYMMDD} $postTitle $contentTitle $filename[ $seq{1}].$ext`
 
 ## 依存関係の自動更新
 

@@ -36,11 +36,12 @@ describe("mergeSettings", () => {
     expect(mergeSettings({ illegalCharReplacement: "\x00" }).illegalCharReplacement).toBe("_");
     expect(mergeSettings({ illegalCharReplacement: "-" }).illegalCharReplacement).toBe("-");
   });
-  it("既定テンプレは連番オプショナルグループを含む", () => {
-    expect(DEFAULT_SETTINGS.pathTemplate).toContain("[$seq{3}_]");
+  it("指定の既定テンプレートを使う", () => {
+    expect(DEFAULT_SETTINGS.pathTemplate).toBe("$creator/$date{YYYYMMDD} $postTitle $contentTitle $filename[ $seq{1}].$ext");
+    expect(DEFAULT_SETTINGS.zipPathTemplate).toBe("$creator/$date{YYYYMMDD} $postTitle $contentTitle.$ext");
+    expect(DEFAULT_SETTINGS.zipEntryTemplate).toBe("$date{YYYYMMDD} $postTitle $contentTitle $seq{1}.$ext");
   });
   it("既定は zip モード ON", () => {
     expect(DEFAULT_SETTINGS.zipGalleries).toBe(true);
-    expect(DEFAULT_SETTINGS.zipPathTemplate).toContain(".zip");
   });
 });

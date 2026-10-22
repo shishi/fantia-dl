@@ -7,15 +7,15 @@ import { isSafeReplacement } from "./sanitizer";
 export const DOWNLOAD_CONFLICT_ACTION = "uniquify" as const;
 
 export const DEFAULT_SETTINGS: Settings = {
-  pathTemplate: "fantia/$creator/$date{YYYYMMDD}_$postTitle/$contentTitle/[$seq{3}_]$filename.$ext",
+  pathTemplate: "$creator/$date{YYYYMMDD} $postTitle $contentTitle $filename[ $seq{1}].$ext",
   illegalCharReplacement: "_",
   contentTypes: { photo: true, file: true, video: true },
   segmentMaxLen: 200,
   fullPathMaxLen: 180,
   uniquifyHeadroom: 16,
   zipGalleries: true,
-  zipPathTemplate: "fantia/$creator/$date{YYYYMMDD}_$postTitle/$contentTitle.zip",
-  zipEntryTemplate: "[$seq{3}_]$filename.$ext",
+  zipPathTemplate: "$creator/$date{YYYYMMDD} $postTitle $contentTitle.$ext",
+  zipEntryTemplate: "$date{YYYYMMDD} $postTitle $contentTitle $seq{1}.$ext",
 };
 
 // 既知キーだけを拾う allowlist merge。旧 conflictAction や未知キーを結果に持ち込まない

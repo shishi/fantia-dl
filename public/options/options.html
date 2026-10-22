@@ -92,9 +92,9 @@ code{background:#eaeaea;padding:1px 4px;border-radius:3px;font-size:12px;font-fa
 
 <p><b>例テンプレ(既定値)</b>:</p>
 <ul>
-<li>単体:<code>fantia/$creator/$date{YYYYMMDD}_$postTitle/$contentTitle/[$seq{3}_]$filename.$ext</code></li>
-<li>zip ファイル:<code>fantia/$creator/$date{YYYYMMDD}_$postTitle/$contentTitle.zip</code></li>
-<li>zip 内エントリ:<code>[$seq{3}_]$filename.$ext</code></li>
+<li>単体:<code>$creator/$date{YYYYMMDD} $postTitle $contentTitle $filename[ $seq{1}].$ext</code></li>
+<li>zip ファイル:<code>$creator/$date{YYYYMMDD} $postTitle $contentTitle.$ext</code></li>
+<li>zip 内エントリ:<code>$date{YYYYMMDD} $postTitle $contentTitle $seq{1}.$ext</code></li>
 </ul>
 
 </details>
